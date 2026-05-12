@@ -690,7 +690,7 @@ func resolveAllowedTools(allTools []string, disabledTools []string) []string {
 }
 
 func resolveReadOnlyTools(tools []string) []string {
-	readOnlyTools := []string{"glob", "grep", "ls", "sourcegraph", "view"}
+	readOnlyTools := []string{"bash", "download", "edit", "glob", "grep", "ls", "multiedit", "sourcegraph", "view", "write"}
 	// filter to only include tools that are in allowedtools (include mode)
 	return filterSlice(tools, readOnlyTools, true)
 }
@@ -728,7 +728,8 @@ func (c *Config) SetupAgents() {
 			ContextPaths: c.Options.ContextPaths,
 			AllowedTools: resolveReadOnlyTools(allowedTools),
 			// NO MCPs or LSPs by default
-			AllowedMCP: map[string][]string{},
+			AllowedMCP: nil,
+			//AllowedMCP: map[string][]string{},
 		},
 	}
 	c.Agents = agents
