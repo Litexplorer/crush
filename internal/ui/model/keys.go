@@ -57,14 +57,15 @@ type KeyMap struct {
 	}
 
 	// Global key maps
-	Quit       key.Binding
-	Help       key.Binding
-	Commands   key.Binding
-	Models     key.Binding
-	Suspend    key.Binding
-	Sessions   key.Binding
-	Tab        key.Binding
-	ToggleYolo key.Binding
+	Quit              key.Binding
+	Help              key.Binding
+	Commands          key.Binding
+	Models            key.Binding
+	Suspend           key.Binding
+	Sessions          key.Binding
+	SummarizeSession  key.Binding
+	Tab               key.Binding
+	ToggleYolo        key.Binding
 }
 
 func DefaultKeyMap() KeyMap {
@@ -92,6 +93,10 @@ func DefaultKeyMap() KeyMap {
 		Sessions: key.NewBinding(
 			key.WithKeys("ctrl+s"),
 			key.WithHelp("ctrl+s", "sessions"),
+		),
+		SummarizeSession: key.NewBinding(
+			key.WithKeys("ctrl+u"),
+			key.WithHelp("ctrl+u", "summarize session"),
 		),
 		Tab: key.NewBinding(
 			key.WithKeys("tab"),

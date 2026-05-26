@@ -1805,6 +1805,22 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 			}
 			cmds = append(cmds, tea.Suspend)
 			return true
+		case key.Matches(msg, m.keyMap.SummarizeSession):
+			if m.state != uiChat || !m.hasSession() {
+				return false
+			}
+			if m.isAgentBusy() {
+				cmds = append(cmds, util.ReportWarn("Agent is busy, please wait before summarizing session..."))
+				return true
+			}
+			cmds = append(cmds, func() tea.Msg {
+				err := m.com.Workspace.AgentSummarize(context.Background(), m.session.ID)
+				if err != nil {
+					return util.ReportError(err)()
+				}
+				return nil
+			})
+			return true
 		case key.Matches(msg, m.keyMap.ToggleYolo):
 			yolo := !m.com.Workspace.PermissionSkipRequests()
 			m.com.Workspace.PermissionSetSkipRequests(yolo)
@@ -2335,6 +2351,10 @@ func (m *UI) ShortHelp() []key.Binding {
 			k.Models,
 		)
 
+		if m.hasSession() {
+			binds = append(binds, k.SummarizeSession)
+		}
+
 		switch m.focus {
 		case uiFocusEditor:
 			binds = append(
@@ -2423,7 +2443,7 @@ func (m *UI) FullHelp() [][]key.Binding {
 			k.ToggleYolo,
 		)
 		if hasSession {
-			mainBinds = append(mainBinds, k.Chat.NewSession)
+			mainBinds = append(mainBinds, k.Chat.NewSession, k.SummarizeSession)
 		}
 
 		binds = append(binds, mainBinds)
