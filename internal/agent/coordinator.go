@@ -66,8 +66,15 @@ var copilotResponsesModels = map[string]bool{
 	"gpt-5.2":       true,
 	"gpt-5.2-codex": true,
 	"gpt-5.3-codex": true,
+	"gpt-5.4":       true,
 	"gpt-5.4-mini":  true,
+	"gpt-5.5":       true,
 	"gpt-5-mini":    true,
+}
+
+// OpenCode models that user Anthropic Messages API instead of Chat Completions.
+var opencodeMessagesModels = map[string]bool{
+	"qwen3.7-max": true,
 }
 
 type Coordinator interface {
@@ -95,6 +102,7 @@ type coordinator struct {
 	filetracker filetracker.Service
 	lspManager  *lsp.Manager
 	notify      pubsub.Publisher[notify.Notification]
+	runComplete pubsub.Publisher[notify.RunComplete]
 
 	currentAgent SessionAgent
 	agents       map[string]SessionAgent
@@ -117,6 +125,7 @@ func NewCoordinator(
 	filetracker filetracker.Service,
 	lspManager *lsp.Manager,
 	notify pubsub.Publisher[notify.Notification],
+	runComplete pubsub.Publisher[notify.RunComplete],
 	skillsMgr *skills.Manager,
 ) (Coordinator, error) {
 	// Skills are pre-discovered by the caller (see app.New /
@@ -141,6 +150,7 @@ func NewCoordinator(
 		filetracker:  filetracker,
 		lspManager:   lspManager,
 		notify:       notify,
+		runComplete:  runComplete,
 		agents:       make(map[string]SessionAgent),
 		allSkills:    allSkills,
 		activeSkills: activeSkills,
@@ -208,9 +218,34 @@ func (c *coordinator) Run(ctx context.Context, sessionID string, prompt string, 
 		slog.Error("Failed to refresh OAuth2 token. Proceeding with existing token.", "error", err)
 	}
 
+	// Coalesce per-attempt RunComplete payloads so only the final
+	// outcome reaches subscribers. Without this, the first attempt's
+	// failed RunComplete (unauthorized) would race ahead of the
+	// retry's success, and `crush run` would exit on the stale error
+	// before ever seeing the retry result. Each attempt's
+	// SessionAgentCall.OnComplete hook overwrites latest; we publish
+	// exactly once after retries resolve, via PublishMustDeliver, so
+	// a momentarily-full subscriber buffer can't silently drop the
+	// terminal event.
+	var (
+		latest    notify.RunComplete
+		hasLatest bool
+	)
+	onComplete := func(rc notify.RunComplete) {
+		latest = rc
+		hasLatest = true
+	}
+	// Propagate the caller-supplied RunID (set via agent.WithRunID
+	// at the HTTP boundary in backend.SendMessage) onto the
+	// SessionAgentCall so the terminal RunComplete event echoes it
+	// back. Both attempts in the retry chain reuse the same RunID;
+	// the coalesce closure publishes the final outcome under that
+	// same correlator.
+	runID := RunIDFromContext(ctx)
 	run := func() (*fantasy.AgentResult, error) {
 		return c.currentAgent.Run(ctx, SessionAgentCall{
 			SessionID:        sessionID,
+			RunID:            runID,
 			Prompt:           prompt,
 			Attachments:      attachments,
 			MaxOutputTokens:  maxTokens,
@@ -220,6 +255,7 @@ func (c *coordinator) Run(ctx context.Context, sessionID string, prompt string, 
 			TopK:             topK,
 			FrequencyPenalty: freqPenalty,
 			PresencePenalty:  presPenalty,
+			OnComplete:       onComplete,
 		})
 	}
 	beforeLoaded := c.skillTracker.LoadedNames()
@@ -228,10 +264,13 @@ func (c *coordinator) Run(ctx context.Context, sessionID string, prompt string, 
 
 	if c.isUnauthorized(originalErr) {
 		if err := c.retryAfterUnauthorized(ctx, providerCfg); err == nil {
-			return run()
+			result, originalErr = run()
 		}
 	}
 
+	if hasLatest && c.runComplete != nil {
+		c.runComplete.PublishMustDeliver(ctx, pubsub.UpdatedEvent, latest)
+	}
 	return result, originalErr
 }
 
@@ -450,6 +489,7 @@ func (c *coordinator) buildAgent(ctx context.Context, prompt *prompt.Prompt, age
 		Messages:             c.messages,
 		Tools:                nil,
 		Notify:               c.notify,
+		RunComplete:          c.runComplete,
 	})
 
 	c.readyWg.Go(func() error {
@@ -756,7 +796,8 @@ func (c *coordinator) buildOpenaiCompatProvider(baseURL, apiKey string, headers 
 
 	// Set HTTP client based on provider and debug mode.
 	var httpClient *http.Client
-	if providerID == string(catwalk.InferenceProviderCopilot) {
+	switch providerID {
+	case string(catwalk.InferenceProviderCopilot):
 		opts = append(
 			opts,
 			openaicompat.WithUseResponsesAPI(),
@@ -765,7 +806,8 @@ func (c *coordinator) buildOpenaiCompatProvider(baseURL, apiKey string, headers 
 			}),
 		)
 		httpClient = copilot.NewClient(isSubAgent, c.cfg.Config().Options.Debug)
-	} else if c.cfg.Config().Options.Debug {
+	}
+	if httpClient == nil && c.cfg.Config().Options.Debug {
 		httpClient = log.NewHTTPClient()
 	}
 	if httpClient != nil {
@@ -893,6 +935,14 @@ func (c *coordinator) buildProvider(providerCfg config.ProviderConfig, model con
 
 	apiKey, _ := c.cfg.Resolve(providerCfg.APIKey)
 	baseURL, _ := c.cfg.Resolve(providerCfg.BaseURL)
+
+	switch providerCfg.ID {
+	case string(catwalk.InferenceProviderOpenCodeGo), string(catwalk.InferenceProviderOpenCodeZen):
+		if opencodeMessagesModels[model.Model] {
+			baseURL = strings.TrimSuffix(baseURL, "/v1")
+			return c.buildAnthropicProvider(baseURL, apiKey, headers, providerCfg.ID)
+		}
+	}
 
 	switch providerCfg.Type {
 	case openai.Name:
