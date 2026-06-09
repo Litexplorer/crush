@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"iter"
 	"maps"
 	"slices"
 	"strings"
@@ -14,6 +15,27 @@ import (
 	"github.com/charmbracelet/x/powernap/pkg/lsp/protocol"
 )
 
+// isActiveLSPState reports whether a state represents an active LSP server.
+func isActiveLSPState(s lsp.ServerState) bool {
+	return s == lsp.StateReady || s == lsp.StateStarting
+}
+
+// sortLSPs orders LSP clients with active states (Ready, Starting) first and
+// otherwise sorts alphabetically by name.
+func sortLSPs(in iter.Seq[app.LSPClientInfo]) []app.LSPClientInfo {
+	return slices.SortedFunc(in, func(a, b app.LSPClientInfo) int {
+		aActive := isActiveLSPState(a.State)
+		bActive := isActiveLSPState(b.State)
+		if aActive != bActive {
+			if aActive {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(a.Name, b.Name)
+	})
+}
+
 // LSPInfo wraps LSP client information with diagnostic counts by severity.
 type LSPInfo struct {
 	app.LSPClientInfo
@@ -25,9 +47,7 @@ type LSPInfo struct {
 func (m *UI) lspInfo(width, maxItems int, isSection bool) string {
 	t := m.com.Styles
 
-	states := slices.SortedFunc(maps.Values(m.lspStates), func(a, b app.LSPClientInfo) int {
-		return strings.Compare(a.Name, b.Name)
-	})
+	states := sortLSPs(maps.Values(m.lspStates))
 
 	var lsps []LSPInfo
 	for _, state := range states {
