@@ -683,6 +683,7 @@ func allToolNames() []string {
 		"lsp_diagnostics",
 		"lsp_references",
 		"lsp_restart",
+		"lsp_outline",
 		"fetch",
 		"agentic_fetch",
 		"glob",
