@@ -94,7 +94,7 @@ func TestRecordRecentModel_TrimsToMax(t *testing.T) {
 	cfg.setDefaults(dir, "")
 	store := testStoreWithPath(cfg, dir)
 
-	// Insert 6 unique models; max is 5
+	// Insert 11 unique models; max is 10
 	entries := []SelectedModel{
 		{Provider: "p1", Model: "m1"},
 		{Provider: "p2", Model: "m2"},
@@ -102,6 +102,11 @@ func TestRecordRecentModel_TrimsToMax(t *testing.T) {
 		{Provider: "p4", Model: "m4"},
 		{Provider: "p5", Model: "m5"},
 		{Provider: "p6", Model: "m6"},
+		{Provider: "p7", Model: "m7"},
+		{Provider: "p8", Model: "m8"},
+		{Provider: "p9", Model: "m9"},
+		{Provider: "p10", Model: "m10"},
+		{Provider: "p11", Model: "m11"},
 	}
 	for _, e := range entries {
 		require.NoError(t, store.recordRecentModel(ScopeGlobal, SelectedModelTypeLarge, e))
@@ -109,26 +114,31 @@ func TestRecordRecentModel_TrimsToMax(t *testing.T) {
 
 	// in-memory state
 	got := cfg.RecentModels[SelectedModelTypeLarge]
-	require.Len(t, got, 5)
-	// Newest first, capped at 5: p6..p2
-	require.Equal(t, SelectedModel{Provider: "p6", Model: "m6"}, got[0])
-	require.Equal(t, SelectedModel{Provider: "p5", Model: "m5"}, got[1])
-	require.Equal(t, SelectedModel{Provider: "p4", Model: "m4"}, got[2])
-	require.Equal(t, SelectedModel{Provider: "p3", Model: "m3"}, got[3])
-	require.Equal(t, SelectedModel{Provider: "p2", Model: "m2"}, got[4])
+	require.Len(t, got, 10)
+	// Newest first, capped at 10: p11..p2
+	require.Equal(t, SelectedModel{Provider: "p11", Model: "m11"}, got[0])
+	require.Equal(t, SelectedModel{Provider: "p10", Model: "m10"}, got[1])
+	require.Equal(t, SelectedModel{Provider: "p9", Model: "m9"}, got[2])
+	require.Equal(t, SelectedModel{Provider: "p8", Model: "m8"}, got[3])
+	require.Equal(t, SelectedModel{Provider: "p7", Model: "m7"}, got[4])
+	require.Equal(t, SelectedModel{Provider: "p6", Model: "m6"}, got[5])
+	require.Equal(t, SelectedModel{Provider: "p5", Model: "m5"}, got[6])
+	require.Equal(t, SelectedModel{Provider: "p4", Model: "m4"}, got[7])
+	require.Equal(t, SelectedModel{Provider: "p3", Model: "m3"}, got[8])
+	require.Equal(t, SelectedModel{Provider: "p2", Model: "m2"}, got[9])
 
 	// persisted state: verify trimmed to 5 and newest-first order
 	rm := readRecentModels(t, store.globalDataPath)
 	large, ok := rm[string(SelectedModelTypeLarge)].([]any)
 	require.True(t, ok)
-	require.Len(t, large, 5)
+	require.Len(t, large, 10)
 	// Build provider:model IDs and verify order
 	var ids []string
 	for _, v := range large {
 		m := v.(map[string]any)
 		ids = append(ids, m["provider"].(string)+":"+m["model"].(string))
 	}
-	require.Equal(t, []string{"p6:m6", "p5:m5", "p4:m4", "p3:m3", "p2:m2"}, ids)
+	require.Equal(t, []string{"p11:m11", "p10:m10", "p9:m9", "p8:m8", "p7:m7", "p6:m6", "p5:m5", "p4:m4", "p3:m3", "p2:m2"}, ids)
 }
 
 func TestRecordRecentModel_SkipsEmptyValues(t *testing.T) {

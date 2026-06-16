@@ -667,7 +667,7 @@ func (c *Config) SmallModel() *catwalk.Model {
 	return c.GetModel(model.Provider, model.Model)
 }
 
-const maxRecentModelsPerType = 5
+const maxRecentModelsPerType = 10
 
 func allToolNames() []string {
 	return []string{
