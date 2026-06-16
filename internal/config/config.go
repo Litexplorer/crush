@@ -214,8 +214,12 @@ type LSPConfig struct {
 type TUIOptions struct {
 	CompactMode bool   `json:"compact_mode,omitempty" jsonschema:"description=Enable compact mode for the TUI interface,default=false"`
 	DiffMode    string `json:"diff_mode,omitempty" jsonschema:"description=Diff mode for the TUI interface,enum=unified,enum=split"`
-	// Here we can add themes later or any TUI related options
-	//
+	// ThemeFile is the path to an OpenCode-format theme JSON file.
+	// When set, it overrides the provider-based theme selection.
+	// The file must contain a "dark.palette" object with at least a
+	// "neutral" color; all other palette entries are optional and
+	// fall back to the neutral/ink pair.
+	ThemeFile string `json:"theme_file,omitempty" jsonschema:"description=Path to an OpenCode-format theme JSON file that overrides the provider-based theme,example=~/.config/crush/themes/custom.json"`
 
 	Completions Completions `json:"completions,omitzero" jsonschema:"description=Completions UI options"`
 	Transparent *bool       `json:"transparent,omitempty" jsonschema:"description=Enable transparent background for the TUI interface,default=false"`

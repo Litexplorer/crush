@@ -130,6 +130,141 @@ func notifyLSPs(
 	wg.Wait()
 }
 
+// symbolKindName returns a human-readable name for a LSP SymbolKind.
+func symbolKindName(kind protocol.SymbolKind) string {
+	switch kind {
+	case protocol.File:
+		return "file"
+	case protocol.Module:
+		return "module"
+	case protocol.Namespace:
+		return "namespace"
+	case protocol.Package:
+		return "package"
+	case protocol.Class:
+		return "class"
+	case protocol.Method:
+		return "method"
+	case protocol.Property:
+		return "property"
+	case protocol.Field:
+		return "field"
+	case protocol.Constructor:
+		return "constructor"
+	case protocol.Enum:
+		return "enum"
+	case protocol.Interface:
+		return "interface"
+	case protocol.Function:
+		return "func"
+	case protocol.Variable:
+		return "var"
+	case protocol.Constant:
+		return "const"
+	case protocol.String:
+		return "string"
+	case protocol.Number:
+		return "number"
+	case protocol.Boolean:
+		return "boolean"
+	case protocol.Array:
+		return "array"
+	case protocol.Object:
+		return "object"
+	case protocol.Key:
+		return "key"
+	case protocol.Null:
+		return "null"
+	case protocol.EnumMember:
+		return "enum member"
+	case protocol.Struct:
+		return "struct"
+	case protocol.Event:
+		return "event"
+	case protocol.Operator:
+		return "operator"
+	case protocol.TypeParameter:
+		return "type parameter"
+	default:
+		return "symbol"
+	}
+}
+
+// formatDocumentSymbols recursively builds a tree string from DocumentSymbol values.
+func formatDocumentSymbols(symbols []protocol.DocumentSymbol, indent string) []string {
+	var lines []string
+	for i, sym := range symbols {
+		prefix := "├── "
+		if i == len(symbols)-1 {
+			prefix = "└── "
+		}
+		kindName := symbolKindName(sym.Kind)
+		line := indent + prefix + kindName + " " + sym.Name
+		if sym.Detail != "" {
+			line += " " + sym.Detail
+		}
+		lines = append(lines, line)
+		if len(sym.Children) > 0 {
+			childPrefix := "│   "
+			if i == len(symbols)-1 {
+				childPrefix = "    "
+			}
+			lines = append(lines, formatDocumentSymbols(sym.Children, indent+childPrefix)...)
+		}
+	}
+	return lines
+}
+
+// getDocumentSymbols retrieves the LSP document symbol tree for a file and
+// returns it as an XML-like <file_structure> block. Returns "" if no LSP
+// server handles the file or if there are no symbols.
+func getDocumentSymbols(ctx context.Context, filePath string, manager *lsp.Manager) string {
+	if manager == nil {
+		return ""
+	}
+
+	var output strings.Builder
+
+	for lspName, client := range manager.Clients().Seq2() {
+		if !client.HandlesFile(filePath) {
+			continue
+		}
+
+		symbols, err := client.GetDocumentSymbols(ctx, filePath)
+		if err != nil {
+			slog.Debug("Failed to get document symbols", "lsp", lspName, "file", filePath, "error", err)
+			continue
+		}
+
+		if len(symbols) == 0 {
+			continue
+		}
+
+		if output.Len() == 0 {
+			output.WriteString("\n<file_structure>\n")
+		}
+
+		for _, result := range symbols {
+			switch sym := result.(type) {
+			case *protocol.DocumentSymbol:
+				lines := formatDocumentSymbols([]protocol.DocumentSymbol{*sym}, "")
+				for _, line := range lines {
+					output.WriteString(line + "\n")
+				}
+			case *protocol.SymbolInformation:
+				kindName := symbolKindName(sym.Kind)
+				output.WriteString(kindName + " " + sym.Name + "\n")
+			}
+		}
+	}
+
+	if output.Len() > 0 {
+		output.WriteString("</file_structure>\n")
+	}
+
+	return output.String()
+}
+
 func getDiagnostics(filePath string, manager *lsp.Manager) string {
 	if manager == nil {
 		return ""

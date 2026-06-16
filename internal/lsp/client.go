@@ -669,3 +669,16 @@ func (c *Client) FindReferences(ctx context.Context, filepath string, line, char
 	// See: https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#position
 	return c.client.FindReferences(ctx, filepath, line-1, character-1, includeDeclaration)
 }
+
+// GetDocumentSymbols retrieves the document symbol tree (outline) for a file.
+func (c *Client) GetDocumentSymbols(ctx context.Context, filepath string) ([]protocol.DocumentSymbolResult, error) {
+	if err := c.OpenFileOnDemand(ctx, filepath); err != nil {
+		return nil, err
+	}
+
+	// Add timeout to prevent hanging on slow LSP servers.
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	return c.client.RequestDocumentSymbols(ctx, filepath)
+}

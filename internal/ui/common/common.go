@@ -3,6 +3,7 @@ package common
 import (
 	"fmt"
 	"image"
+	"log/slog"
 	"os"
 
 	tea "charm.land/bubbletea/v2"
@@ -34,12 +35,37 @@ func (c *Common) Config() *config.Config {
 // DefaultCommon returns the default common UI configurations. When the
 // workspace has a large model selected, the theme is chosen based on its
 // provider; otherwise the default theme is used.
+// If a custom theme file is configured via options.tui.theme_file, it
+// takes precedence over provider-based theme selection.
 func DefaultCommon(ws workspace.Workspace) *Common {
-	s := styles.ThemeForProvider(largeModelProviderID(ws))
+	s := loadTheme(ws)
 	return &Common{
 		Workspace: ws,
 		Styles:    &s,
 	}
+}
+
+// loadTheme picks the active Styles. Custom theme files (options.tui.theme_file)
+// take priority; otherwise the theme is derived from the large model's provider.
+func loadTheme(ws workspace.Workspace) styles.Styles {
+	cfg := ws.Config()
+	if cfg != nil && cfg.Options != nil && cfg.Options.TUI != nil &&
+		cfg.Options.TUI.ThemeFile != "" {
+		expanded := os.ExpandEnv(cfg.Options.TUI.ThemeFile)
+		data, err := os.ReadFile(expanded)
+		if err == nil {
+			s, err := styles.ThemeFromJSON(data)
+			if err == nil {
+				return s
+			}
+			slog.Warn("Failed to parse theme file, falling back to provider theme",
+				"file", expanded, "error", err)
+		} else {
+			slog.Warn("Failed to read theme file, falling back to provider theme",
+				"file", expanded, "error", err)
+		}
+	}
+	return styles.ThemeForProvider(largeModelProviderID(ws))
 }
 
 // largeModelProviderID returns the provider ID of the currently selected
