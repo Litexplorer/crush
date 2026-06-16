@@ -1740,8 +1740,10 @@ func (m *UI) handleSelectModel(msg dialog.ActionSelectModel) tea.Cmd {
 	} else {
 		if msg.ModelType == config.SelectedModelTypeLarge {
 			// Swap the theme live based on the newly selected large
-			// model's provider.
-			m.applyTheme(styles.ThemeForProvider(providerID))
+			// model's provider. Re-evaluate any custom theme file as
+			// well so the user's options.tui.theme_file isn't clobbered
+			// by a hardcoded provider theme.
+			m.applyTheme(common.LoadActiveTheme(m.com.Workspace))
 		}
 		if _, ok := cfg.Models[config.SelectedModelTypeSmall]; !ok {
 			// Ensure small model is set is unset.

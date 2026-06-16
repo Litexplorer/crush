@@ -38,16 +38,22 @@ func (c *Common) Config() *config.Config {
 // If a custom theme file is configured via options.tui.theme_file, it
 // takes precedence over provider-based theme selection.
 func DefaultCommon(ws workspace.Workspace) *Common {
-	s := loadTheme(ws)
+	s := LoadActiveTheme(ws)
 	return &Common{
 		Workspace: ws,
 		Styles:    &s,
 	}
 }
 
-// loadTheme picks the active Styles. Custom theme files (options.tui.theme_file)
+// LoadActiveTheme picks the active Styles. Custom theme files (options.tui.theme_file)
 // take priority; otherwise the theme is derived from the large model's provider.
-func loadTheme(ws workspace.Workspace) styles.Styles {
+// A nil workspace is treated as "no config" and falls back to the default
+// provider theme, so callers (e.g. model-switch hot path, tests) don't have
+// to guard separately.
+func LoadActiveTheme(ws workspace.Workspace) styles.Styles {
+	if ws == nil {
+		return styles.ThemeForProvider("")
+	}
 	cfg := ws.Config()
 	if cfg != nil && cfg.Options != nil && cfg.Options.TUI != nil &&
 		cfg.Options.TUI.ThemeFile != "" {
