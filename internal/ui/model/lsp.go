@@ -8,10 +8,10 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/crush/internal/app"
 	"github.com/charmbracelet/crush/internal/lsp"
 	"github.com/charmbracelet/crush/internal/ui/common"
 	"github.com/charmbracelet/crush/internal/ui/styles"
+	"github.com/charmbracelet/crush/internal/workspace"
 	"github.com/charmbracelet/x/powernap/pkg/lsp/protocol"
 )
 
@@ -38,7 +38,7 @@ func sortLSPs(in iter.Seq[app.LSPClientInfo]) []app.LSPClientInfo {
 
 // LSPInfo wraps LSP client information with diagnostic counts by severity.
 type LSPInfo struct {
-	app.LSPClientInfo
+	workspace.LSPClientInfo
 	Diagnostics map[protocol.DiagnosticSeverity]int
 }
 
