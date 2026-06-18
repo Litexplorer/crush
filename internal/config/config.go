@@ -714,7 +714,7 @@ func resolveAllowedTools(allTools []string, disabledTools []string) []string {
 }
 
 func resolveReadOnlyTools(tools []string) []string {
-	readOnlyTools := []string{"bash", "download", "edit", "glob", "grep", "ls", "multiedit", "sourcegraph", "view", "write"}
+	readOnlyTools := []string{"bash", "download", "edit", "fetch", "agentic_fetch", "glob", "grep", "ls", "lsp_diagnostics", "lsp_references", "lsp_restart", "lsp_outline", "multiedit", "sourcegraph", "view", "write"}
 	// filter to only include tools that are in allowedtools (include mode)
 	return filterSlice(tools, readOnlyTools, true)
 }

@@ -22,8 +22,8 @@ func isActiveLSPState(s lsp.ServerState) bool {
 
 // sortLSPs orders LSP clients with active states (Ready, Starting) first and
 // otherwise sorts alphabetically by name.
-func sortLSPs(in iter.Seq[app.LSPClientInfo]) []app.LSPClientInfo {
-	return slices.SortedFunc(in, func(a, b app.LSPClientInfo) int {
+func sortLSPs(in iter.Seq[workspace.LSPClientInfo]) []workspace.LSPClientInfo {
+	return slices.SortedFunc(in, func(a, b workspace.LSPClientInfo) int {
 		aActive := isActiveLSPState(a.State)
 		bActive := isActiveLSPState(b.State)
 		if aActive != bActive {

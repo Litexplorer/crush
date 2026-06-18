@@ -48,6 +48,8 @@ Thumbs.db
 **/.crush/**
 
 /crush
+my-crush
+my-crush.exe
 /tmp/
 
 manpages/
