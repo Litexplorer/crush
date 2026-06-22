@@ -47,7 +47,7 @@ func viewDescription() string {
 type ViewParams struct {
 	FilePath string `json:"file_path" description:"The path to the file to read"`
 	Offset   int    `json:"offset,omitempty" description:"The line number to start reading from (0-based)"`
-	Limit    int    `json:"limit,omitempty" description:"The number of lines to read (defaults to 200)"`
+	Limit    int    `json:"limit,omitempty" description:"The number of lines to read (defaults to 60)"`
 }
 
 type ViewPermissionsParams struct {
@@ -74,7 +74,8 @@ type ViewResponseMetadata struct {
 const (
 	ViewToolName     = "view"
 	MaxViewSize      = 200 * 1024 // 200KB
-	DefaultReadLimit = 200
+	DefaultReadLimit = 60
+	OutlineThreshold = 80
 	MaxLineLength    = 2000
 )
 
@@ -359,6 +360,21 @@ func readTextFile(filePath string, offset, limit, maxContentSize int) (string, b
 	}
 
 	return strings.Join(lines, "\n"), hasMore, nil
+}
+
+func countFileLines(filePath string) (int, error) {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	count := 0
+	for scanner.Scan() {
+		count++
+	}
+	return count, scanner.Err()
 }
 
 func getImageMimeType(filePath string) (bool, string) {

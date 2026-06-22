@@ -138,7 +138,7 @@ func TestViewToolBlocksOversizedReturnedSections(t *testing.T) {
 
 	workingDir := t.TempDir()
 	filePath := filepath.Join(workingDir, "large-section.txt")
-	lines := make([]string, DefaultReadLimit)
+	lines := make([]string, 200)
 	for i := range lines {
 		lines[i] = strings.Repeat("a", MaxLineLength)
 	}
@@ -148,6 +148,7 @@ func TestViewToolBlocksOversizedReturnedSections(t *testing.T) {
 	ctx := context.WithValue(context.Background(), SessionIDContextKey, "test-session")
 	resp := runViewTool(t, tool, ctx, ViewParams{
 		FilePath: filePath,
+		Limit:    200,
 	})
 
 	require.True(t, resp.IsError)
