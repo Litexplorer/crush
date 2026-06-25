@@ -123,3 +123,14 @@ func formatOutlineSymbols(symbols []protocol.DocumentSymbol, filePath, indent st
 	}
 	return lines
 }
+
+func runAstOutline(filePath string) string {
+	if _, err := exec.LookPath("ast-outline"); err != nil {
+		return ""
+	}
+	out, err := exec.Command("ast-outline", filePath).Output()
+	if err != nil || len(out) == 0 {
+		return ""
+	}
+	return string(out)
+}

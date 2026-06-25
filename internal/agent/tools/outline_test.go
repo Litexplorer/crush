@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -59,4 +60,18 @@ func TestFormatOutlineSymbols(t *testing.T) {
 
 	// Verify we got tree structure with ranges for each symbol
 	t.Logf("Outline symbols:\n<outline>\n%s\n</outline>", got)
+}
+
+func TestRunAstOutline(t *testing.T) {
+	if _, err := exec.LookPath("ast-outline"); err != nil {
+		t.Skip("ast-outline not installed; skipping fallback test")
+	}
+
+	out := runAstOutline("outline.go")
+	if out == "" {
+		t.Fatal("expected non-empty ast-outline output for outline.go")
+	}
+	if !strings.Contains(out, "NewOutlineTool") {
+		t.Errorf("ast-outline output missing NewOutlineTool symbol:\n%s", out)
+	}
 }
