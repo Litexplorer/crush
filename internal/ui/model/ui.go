@@ -196,6 +196,11 @@ type UI struct {
 
 	isTransparent bool
 
+	// themeKey identifies the currently applied theme so applyTheme can
+	// skip the expensive style rebuild when switching to a provider that
+	// resolves to the same theme.
+	themeKey string
+
 	focus uiFocusState
 	state uiState
 
@@ -379,6 +384,12 @@ func New(com *common.Common, initialSessionID string, continueLast bool) *UI {
 	}
 
 	status := NewStatus(com, ui)
+
+	// Seed the active theme key from the large model provider so the
+	// first model selection can correctly skip a redundant theme swap.
+	if cfg := com.Config(); cfg != nil {
+		ui.themeKey = styles.ThemeKeyForProvider(cfg.Models[config.SelectedModelTypeLarge].Provider)
+	}
 
 	ui.setEditorPrompt(com.Workspace.PermissionSkipRequests())
 	ui.randomizePlaceholders()
@@ -703,11 +714,23 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.session != nil && msg.Payload.ID == m.session.ID {
 			prevHasInProgress := hasInProgressTodo(m.session.Todos)
+			prevPillsHeight := m.pillsAreaHeight()
 			m.session = &msg.Payload
 			if !prevHasInProgress && hasInProgressTodo(m.session.Todos) {
 				m.todoIsSpinning = true
 				cmds = append(cmds, m.todoSpinner.Tick)
+			}
+			// The pills panel reserves vertical space that the chat area
+			// must yield. Recompute the layout whenever that footprint
+			// changes (todos appearing, the list growing, etc.) so the
+			// box renders on first paint rather than waiting for a toggle.
+			// When the footprint is unchanged we still re-render the pill
+			// content so status changes (e.g. the in-progress spinner)
+			// show up.
+			if m.pillsAreaHeight() != prevPillsHeight {
 				m.updateLayoutAndSize()
+			} else {
+				m.renderPills()
 			}
 			m.autoExpandPillsIfReasonable()
 		}
@@ -2382,6 +2405,13 @@ func (m *UI) Draw(scr uv.Screen, area uv.Rectangle) *tea.Cursor {
 	if m.layout != layout {
 		m.layout = layout
 		m.updateSize()
+	} else if m.state == uiChat && m.hasSession() {
+		// Re-render pills on every draw so the box appears even when
+		// the layout footprint hasn't changed (e.g. todos arrived
+		// while the panel was collapsed). updateSize already calls
+		// renderPills, but only when the layout actually differs;
+		// this catches the steady-state case.
+		m.renderPills()
 	}
 
 	// Clear the screen first
@@ -3391,6 +3421,21 @@ func (m *UI) renderEditorView(width int) string {
 // cacheSidebarLogo renders and caches the sidebar logo at the specified width.
 func (m *UI) cacheSidebarLogo(width int) {
 	m.sidebarLogo = renderLogo(m.com.Styles, true, m.com.IsHyper(), width)
+}
+
+// applyThemeForProvider swaps the active theme to the one associated with
+// the given provider, but only when that theme differs from the one
+// already applied. Most providers share a single theme, so re-selecting a
+// model from the same theme family would otherwise pay the full cost of
+// invalidating the markdown renderer cache and re-rendering the entire
+// transcript for no visible change.
+func (m *UI) applyThemeForProvider(providerID string) {
+	key := styles.ThemeKeyForProvider(providerID)
+	if key == m.themeKey {
+		return
+	}
+	m.themeKey = key
+	m.applyTheme(styles.ThemeForProvider(providerID))
 }
 
 // applyTheme replaces the active styles with the given theme, drops the

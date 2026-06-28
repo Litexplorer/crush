@@ -111,10 +111,10 @@ func Load(workingDir, dataDir string, debug bool) (*ConfigStore, error) {
 	valueResolver := NewShellVariableResolver(env)
 	store.resolver = valueResolver
 
-	// Hold reloadMu during initial load to prevent configureProviders
+	// Hold writeMu during initial load to prevent configureProviders
 	// from triggering auto-reload via RemoveConfigField.
-	store.reloadMu.Lock()
-	defer store.reloadMu.Unlock()
+	store.writeMu.Lock()
+	defer store.writeMu.Unlock()
 
 	if err := cfg.configureProviders(context.Background(), store, env, valueResolver, store.knownProviders); err != nil {
 		return nil, fmt.Errorf("failed to configure providers: %w", err)
@@ -572,11 +572,33 @@ func (c *Config) setDefaults(workingDir, dataDir string) {
 	c.Options.InitializeAs = cmp.Or(c.Options.InitializeAs, defaultInitializeAs)
 }
 
+// powernapDefaults caches the powernap default LSP server catalog. The
+// catalog is static and immutable for the life of the process, but
+// building it (NewManager + LoadDefaults) is expensive and was previously
+// repeated on every config reload. We load it once and only ever read from
+// it via GetServer, so a shared instance is safe.
+var (
+	powernapDefaultsOnce sync.Once
+	powernapDefaults     *powernapConfig.Manager
+)
+
+func lspDefaultsManager() *powernapConfig.Manager {
+	powernapDefaultsOnce.Do(func() {
+		m := powernapConfig.NewManager()
+		// LoadDefaults only fails on malformed embedded defaults, which
+		// would be a build-time bug; treat the manager as usable either
+		// way so a transient error never wedges config loading.
+		_ = m.LoadDefaults()
+		powernapDefaults = m
+	})
+	return powernapDefaults
+}
+
 // applyLSPDefaults applies default values from powernap to LSP configurations
 func (c *Config) applyLSPDefaults() {
-	// Get powernap's default configuration
-	configManager := powernapConfig.NewManager()
-	configManager.LoadDefaults()
+	// Reuse the process-wide default catalog; building it per reload was a
+	// significant chunk of reload latency.
+	configManager := lspDefaultsManager()
 
 	// Apply defaults to each LSP configuration
 	for name, cfg := range c.LSP {
@@ -719,6 +741,8 @@ func configureSelectedModels(store *ConfigStore, knownProviders []catwalk.Provid
 			}
 			if largeModelSelected.ReasoningEffort != "" {
 				large.ReasoningEffort = largeModelSelected.ReasoningEffort
+			} else {
+				large.ReasoningEffort = model.DefaultReasoningEffort
 			}
 			large.Think = largeModelSelected.Think
 			if largeModelSelected.Temperature != nil {
@@ -763,6 +787,8 @@ func configureSelectedModels(store *ConfigStore, knownProviders []catwalk.Provid
 			}
 			if smallModelSelected.ReasoningEffort != "" {
 				small.ReasoningEffort = smallModelSelected.ReasoningEffort
+			} else {
+				small.ReasoningEffort = model.DefaultReasoningEffort
 			}
 			if smallModelSelected.Temperature != nil {
 				small.Temperature = smallModelSelected.Temperature
@@ -900,10 +926,18 @@ func hasAWSCredentials(env env.Env) bool {
 		return true
 	}
 
-	if _, err := os.Stat(filepath.Join(home.Dir(), ".aws/credentials")); err == nil && !testing.Testing() {
+	// File-based credential discovery requires filesystem stats, so do it
+	// last and skip it under test. Checking testing.Testing() before the
+	// os.Stat call (rather than after, in the && tail) ensures the syscall
+	// is never issued during tests, where it otherwise ran unconditionally
+	// and only had its result discarded.
+	if testing.Testing() {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(home.Dir(), ".aws/credentials")); err == nil {
 		return true
 	}
-	if _, err := os.Stat(filepath.Join(home.Dir(), ".aws/login")); err == nil && !testing.Testing() {
+	if _, err := os.Stat(filepath.Join(home.Dir(), ".aws/login")); err == nil {
 		return true
 	}
 
@@ -1058,7 +1092,22 @@ func isInsideWorktree() bool {
 // repositories, missing git binary, plain directories, or any other
 // failure mode). Linked worktrees and submodules each report their own
 // top-level, which is what callers want when bounding lookups.
+// worktreeRootCache memoizes the git worktree root per directory. The root
+// is stable for the life of the process, so we avoid re-shelling out to
+// "git rev-parse" on every config reload. Keyed by the requested dir; the
+// value is the resolved root ("" when dir is not in a git worktree).
+var worktreeRootCache sync.Map // map[string]string
+
 func worktreeRoot(dir string) string {
+	if cached, ok := worktreeRootCache.Load(dir); ok {
+		return cached.(string)
+	}
+	root := computeWorktreeRoot(dir)
+	worktreeRootCache.Store(dir, root)
+	return root
+}
+
+func computeWorktreeRoot(dir string) string {
 	cmd := exec.CommandContext(
 		context.Background(),
 		"git", "rev-parse", "--show-toplevel",
