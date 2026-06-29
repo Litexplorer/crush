@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"os/exec"
 	"strings"
 
 	"charm.land/fantasy"
@@ -32,7 +33,7 @@ func NewOutlineTool(lspManager *lsp.Manager) fantasy.AgentTool {
 			openInLSPs(ctx, lspManager, params.FilePath)
 
 			if lspManager.Clients().Len() == 0 {
-				return fantasy.NewTextErrorResponse("no LSP clients available"), nil
+				return tryAstOutline(params.FilePath)
 			}
 
 			var output strings.Builder
@@ -71,13 +72,22 @@ func NewOutlineTool(lspManager *lsp.Manager) fantasy.AgentTool {
 			}
 
 			if output.Len() == 0 {
-				return fantasy.NewTextResponse("No symbols found in file."), nil
+				return tryAstOutline(params.FilePath)
 			}
 
 			output.WriteString("</outline>\n")
 			return fantasy.NewTextResponse(output.String()), nil
 		},
 	)
+}
+
+// tryAstOutline runs ast-outline as a fallback when LSP returns no symbols.
+func tryAstOutline(filePath string) (fantasy.ToolResponse, error) {
+	out, err := exec.Command("ast-outline", filePath).Output()
+	if err != nil {
+		return fantasy.NewTextResponse("No symbols found in file."), nil
+	}
+	return fantasy.NewTextResponse("\n<outline>\n" + string(out) + "</outline>\n"), nil
 }
 
 // formatOutlineSymbols recursively builds an outline with line ranges.
