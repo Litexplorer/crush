@@ -330,7 +330,11 @@ func New(com *common.Common, initialSessionID string, continueLast bool) *UI {
 	ta.MaxHeight = TextareaMaxHeight
 	ta.Focus()
 
-	ch := NewChat(com)
+	scrollbarMode := config.ScrollbarDefault
+	if cfg := com.Config(); cfg.Options.TUI != nil && cfg.Options.TUI.Scrollbar != "" {
+		scrollbarMode = cfg.Options.TUI.Scrollbar
+	}
+	ch := NewChat(com, scrollbarMode)
 
 	keyMap := DefaultKeyMap()
 
@@ -961,6 +965,10 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
+	case scrollbarHideMsg:
+		if m.state == uiChat {
+			m.chat.HideScrollbar(msg.seq)
+		}
 	case spinner.TickMsg:
 		if m.dialog.HasDialogs() {
 			// route to dialog
@@ -1154,8 +1162,10 @@ func (m *UI) setSessionMessages(msgs []message.Message) tea.Cmd {
 		}
 	}
 
-	m.chat.SetMessages(items...)
-	if cmd := m.chat.ScrollToBottomAndAnimate(); cmd != nil {
+	if cmd := m.chat.SetMessages(items...); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	if cmd := m.chat.RestartPausedVisibleAnimations(); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
 	m.chat.SelectLast()
@@ -1792,18 +1802,36 @@ func (m *UI) refreshHyperAndRetrySelect(msg dialog.ActionSelectModel) tea.Cmd {
 // remaining Hyper credits from the API.
 func (m *UI) fetchHyperCredits() tea.Cmd {
 	return func() tea.Msg {
-		cfg := m.com.Config()
-		if cfg == nil {
+		var (
+			apiKey      string
+			cfg         *config.Config
+			providerCfg config.ProviderConfig
+		)
+		getAPIKey := func() (ok bool) {
+			if cfg = m.com.Config(); cfg == nil {
+				return false
+			}
+			if providerCfg, ok = cfg.Providers.Get(hyper.Name); !ok {
+				return false
+			}
+			var err error
+			apiKey, err = m.com.Workspace.Resolver().ResolveValue(providerCfg.APIKey)
+			return err == nil && apiKey != ""
+		}
+		if !getAPIKey() {
 			return nil
 		}
-		providerCfg, ok := cfg.Providers.Get(hyper.Name)
-		if !ok {
-			return nil
+
+		if providerCfg.OAuthToken != nil && providerCfg.OAuthToken.IsExpired() {
+			ctxRefresh, cancelRefresh := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancelRefresh()
+			if err := m.com.Workspace.RefreshOAuthToken(ctxRefresh, config.ScopeGlobal, hyper.Name); err != nil {
+				slog.Warn("Hyper OAuth refresh failed before fetching credits, trying with existing token", "error", err)
+			} else if !getAPIKey() {
+				return nil
+			}
 		}
-		apiKey, err := m.com.Workspace.Resolver().ResolveValue(providerCfg.APIKey)
-		if err != nil || apiKey == "" {
-			return nil
-		}
+
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		credits, err := hyper.FetchCredits(ctx, apiKey)
