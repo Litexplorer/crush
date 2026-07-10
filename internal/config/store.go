@@ -361,13 +361,21 @@ func (s *ConfigStore) updateLocked(scope Scope, mutate func(*Config) map[string]
 // OverridePreferredModel sets the preferred model for the given type in
 // memory only, without persisting. It is for per-run overrides (such as the
 // non-interactive --model flags) that must not be written to the user's
-// config file.
+// config file. The recent-models list is updated in memory so that the
+// model picker's "Recently used" section stays consistent with the active
+// model.
 func (s *ConfigStore) OverridePreferredModel(modelType SelectedModelType, model SelectedModel) {
 	s.mutateInMemory(func(c *Config) {
 		if c.Models == nil {
 			c.Models = make(map[SelectedModelType]SelectedModel)
 		}
 		c.Models[modelType] = model
+		if updated, changed := nextRecentModels(c, modelType, model); changed {
+			if c.RecentModels == nil {
+				c.RecentModels = make(map[SelectedModelType][]SelectedModel)
+			}
+			c.RecentModels[modelType] = updated
+		}
 	})
 }
 

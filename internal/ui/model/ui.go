@@ -330,6 +330,26 @@ func New(com *common.Common, initialSessionID string, continueLast bool) *UI {
 	ta.MaxHeight = TextareaMaxHeight
 	ta.Focus()
 
+	// Add ctrl+left/right for word navigation (textarea only binds alt+arrow by default).
+	ta.KeyMap.WordForward = key.NewBinding(
+		key.WithKeys("alt+right", "alt+f", "ctrl+right"),
+		key.WithHelp("alt+right/ctrl+right", "word forward"),
+	)
+	ta.KeyMap.WordBackward = key.NewBinding(
+		key.WithKeys("alt+left", "alt+b", "ctrl+left"),
+		key.WithHelp("alt+left/ctrl+left", "word backward"),
+	)
+
+	// Add ctrl+delete/backspace for word deletion (textarea only binds alt+delete/backspace by default).
+	ta.KeyMap.DeleteWordForward = key.NewBinding(
+		key.WithKeys("ctrl+delete"),
+		key.WithHelp("ctrl+delete", "delete word forward"),
+	)
+	ta.KeyMap.DeleteWordBackward = key.NewBinding(
+		key.WithKeys("ctrl+backspace"),
+		key.WithHelp("ctrl+backspace", "delete word backward"),
+	)
+
 	scrollbarMode := config.ScrollbarDefault
 	if cfg := com.Config(); cfg.Options.TUI != nil && cfg.Options.TUI.Scrollbar != "" {
 		scrollbarMode = cfg.Options.TUI.Scrollbar
