@@ -346,8 +346,8 @@ func New(com *common.Common, initialSessionID string, continueLast bool) *UI {
 		key.WithHelp("ctrl+delete", "delete word forward"),
 	)
 	ta.KeyMap.DeleteWordBackward = key.NewBinding(
-		key.WithKeys("ctrl+backspace"),
-		key.WithHelp("ctrl+backspace", "delete word backward"),
+		key.WithKeys("alt+backspace", "ctrl+w", "ctrl+backspace"),
+		key.WithHelp("alt+backspace/ctrl+w", "delete word backward"),
 	)
 
 	scrollbarMode := config.ScrollbarDefault
