@@ -178,12 +178,7 @@ func (m *UI) drawSidebar(scr uv.Screen, area uv.Rectangle) {
 
 	lspsCount := len(m.lspStates)
 
-	mcpsCount := 0
-	for _, mcpCfg := range m.com.Config().MCP.Sorted() {
-		if _, ok := m.mcpStates[mcpCfg.Name]; ok {
-			mcpsCount++
-		}
-	}
+	mcpsCount := len(m.mcpStates)
 
 	skillsCount := len(m.skillStatusItems())
 

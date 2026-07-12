@@ -2,6 +2,9 @@ package model
 
 import (
 	"fmt"
+	"iter"
+	"maps"
+	"slices"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -11,17 +14,33 @@ import (
 	"github.com/charmbracelet/crush/internal/ui/styles"
 )
 
+// isActiveMCPState reports whether a state represents an active MCP client.
+func isActiveMCPState(s mcp.State) bool {
+	return s == mcp.StateConnected || s == mcp.StateStarting
+}
+
+// sortMCPs orders MCP clients with active states (Connected, Starting) first and
+// otherwise sorts alphabetically by name.
+func sortMCPs(in iter.Seq[mcp.ClientInfo]) []mcp.ClientInfo {
+	return slices.SortedFunc(in, func(a, b mcp.ClientInfo) int {
+		aActive := isActiveMCPState(a.State)
+		bActive := isActiveMCPState(b.State)
+		if aActive != bActive {
+			if aActive {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(a.Name, b.Name)
+	})
+}
+
 // mcpInfo renders the MCP status section showing active MCP clients and their
 // tool/prompt counts.
 func (m *UI) mcpInfo(width, maxItems int, isSection bool) string {
-	var mcps []mcp.ClientInfo
 	t := m.com.Styles
 
-	for _, mcp := range m.com.Config().MCP.Sorted() {
-		if state, ok := m.mcpStates[mcp.Name]; ok {
-			mcps = append(mcps, state)
-		}
-	}
+	mcps := sortMCPs(maps.Values(m.mcpStates))
 
 	title := t.Resource.Heading.Render("MCPs")
 	if isSection {
