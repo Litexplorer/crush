@@ -248,7 +248,16 @@ func NewViewTool(
 
 			openInLSPs(ctx, lspManager, filePath)
 			waitForLSPDiagnostics(ctx, lspManager, filePath, 300*time.Millisecond)
-			output := "<file>\n"
+
+			outline := ""
+			if params.Offset <= 0 {
+				outline = getOutline(ctx, lspManager, filePath)
+			}
+			output := ""
+			if outline != "" {
+				output += outline + "\n"
+			}
+			output += "<file>\n"
 			output += addLineNumbers(content, params.Offset+1)
 
 			if hasMore {
