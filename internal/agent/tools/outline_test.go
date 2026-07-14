@@ -45,7 +45,7 @@ func TestFormatOutlineSymbols(t *testing.T) {
 		},
 	}
 
-	lines := formatOutlineSymbols(symbols, "config.go", "")
+	lines := FormatOutlineSymbols(symbols, "config.go", "")
 	got := strings.Join(lines, "\n")
 
 	if !strings.Contains(got, "struct Config                config.go:582-608") &&
