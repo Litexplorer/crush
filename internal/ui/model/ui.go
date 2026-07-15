@@ -3738,6 +3738,18 @@ func (m *UI) sendMessage(content string, attachments ...message.Attachment) tea.
 		m.setState(uiChat, m.focus)
 	}
 
+	// Reload config from disk so the new session picks up any
+	// external modifications to crush.json.
+	cmds = append(cmds, func() tea.Msg {
+		if err := m.com.Workspace.ReloadConfig(context.Background()); err != nil {
+			return util.InfoMsg{
+				Type: util.InfoTypeError,
+				Msg:  fmt.Sprintf("config reload failed: %v", err),
+			}
+		}
+		return nil
+	})
+
 	ctx := context.Background()
 	cmds = append(cmds, func() tea.Msg {
 		for _, path := range m.sessionFileReads {
@@ -3790,6 +3802,19 @@ func (m *UI) runShellCommandInternal(command string, isFirstMessage bool) tea.Cm
 			cmds = append(cmds, m.loadSession(newSession.ID))
 		}
 		m.setState(uiChat, m.focus)
+
+		// Reload config before shell execution to pick up any
+		// external modifications to crush.json.
+		cmds = append(cmds, func() tea.Msg {
+			if err := m.com.Workspace.ReloadConfig(context.Background()); err != nil {
+				return util.InfoMsg{
+					Type: util.InfoTypeError,
+					Msg:  fmt.Sprintf("config reload failed: %v", err),
+				}
+			}
+			return nil
+		})
+
 		// Defer shell execution until loadSessionMsg fires so the chat
 		// list is stable before we add items or start streaming.
 		m.pendingBangCommand = command

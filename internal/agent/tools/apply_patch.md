@@ -1,0 +1,1 @@
+Apply a unified diff patch to one or more files. The patch must be in unified diff format with proper `--- a/path` and `+++ b/path` headers for each file. All hunks within the patch are applied atomically — if any hunk fails, no files are modified. Use this for multi-file refactors or bulk changes. For single-file surgical edits, prefer the `edit` tool.

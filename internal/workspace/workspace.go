@@ -141,6 +141,11 @@ type Workspace interface {
 	WorkingDir() string
 	Resolver() config.VariableResolver
 
+	// ReloadConfig reloads the configuration from disk, picking up
+	// external modifications to crush.json. Called before a new
+	// session runs so the latest config is always used.
+	ReloadConfig(ctx context.Context) error
+
 	// Config mutations (proxied to server in client mode)
 	UpdatePreferredModel(scope config.Scope, modelType config.SelectedModelType, model config.SelectedModel) error
 	SetCompactMode(scope config.Scope, enabled bool) error
