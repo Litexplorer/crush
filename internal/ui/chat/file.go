@@ -369,3 +369,103 @@ func (d *DownloadToolRenderContext) RenderTool(sty *styles.Styles, width int, op
 	body := sty.Tool.Body.Render(toolOutputPlainContent(sty, opts.Result.Content, bodyWidth, opts.ExpandedContent))
 	return joinToolParts(header, body)
 }
+
+// -----------------------------------------------------------------------------
+// ApplyPatch Tool
+// -----------------------------------------------------------------------------
+
+// ApplyPatchToolMessageItem is a message item that represents an apply_patch tool call.
+type ApplyPatchToolMessageItem struct {
+	*baseToolMessageItem
+}
+
+var _ ToolMessageItem = (*ApplyPatchToolMessageItem)(nil)
+
+// NewApplyPatchToolMessageItem creates a new [ApplyPatchToolMessageItem].
+func NewApplyPatchToolMessageItem(
+	sty *styles.Styles,
+	toolCall message.ToolCall,
+	result *message.ToolResult,
+	canceled bool,
+) ToolMessageItem {
+	return newBaseToolMessageItem(sty, toolCall, result, &ApplyPatchToolRenderContext{}, canceled)
+}
+
+// ApplyPatchToolRenderContext renders apply_patch tool messages.
+type ApplyPatchToolRenderContext struct{}
+
+// RenderTool implements the [ToolRenderer] interface.
+func (a *ApplyPatchToolRenderContext) RenderTool(sty *styles.Styles, width int, opts *ToolRenderOpts) string {
+	if opts.IsPending() {
+		return pendingTool(sty, "Apply Patch", opts.Anim, opts.Compact)
+	}
+
+	var params tools.ApplyPatchParams
+	if err := json.Unmarshal([]byte(opts.ToolCall.Input), &params); err != nil {
+		return toolErrorContent(sty, &message.ToolResult{Content: "Invalid parameters"}, width)
+	}
+
+	// Display file count in header.
+	toolParams := []string{fmt.Sprintf("%d file(s)", countPatchFiles(params.Patch))}
+	header := toolHeader(sty, opts.Status, "Apply Patch", width, opts, toolParams...)
+	if opts.Compact {
+		return header
+	}
+
+	if !opts.HasResult() {
+		if earlyState, ok := toolEarlyStateContent(sty, opts, width); ok {
+			return joinToolParts(header, earlyState)
+		}
+		return header
+	}
+
+	// Get diff content from metadata.
+	var meta tools.ApplyPatchResponseMetadata
+	if err := json.Unmarshal([]byte(opts.Result.Metadata), &meta); err != nil {
+		bodyWidth := width - toolBodyLeftPaddingTotal
+		body := sty.Tool.Body.Render(toolOutputPlainContent(sty, opts.Result.Content, bodyWidth, opts.ExpandedContent))
+		return joinToolParts(header, body)
+	}
+
+	// Render diffs for each file with separators.
+	totalAdditions := 0
+	totalRemovals := 0
+	var diffParts []string
+	for _, fd := range meta.Files {
+		file := fsext.PrettyPath(fd.FilePath)
+		diffPart := toolOutputDiffContent(sty, file, fd.OldContent, fd.NewContent, width, opts.ExpandedContent)
+		diffParts = append(diffParts, diffPart)
+		totalAdditions += fd.Additions
+		totalRemovals += fd.Removals
+	}
+
+	// Add separator between file diffs.
+	separator := strings.Repeat("─", width-2)
+	diffContent := strings.Join(diffParts, "\n"+separator+"\n")
+
+	// Add summary line.
+	summary := fmt.Sprintf("%d file(s) changed, %d additions, %d removals", len(meta.Files), totalAdditions, totalRemovals)
+	summaryLine := sty.Tool.Body.Render(summary)
+
+	if opts.Result.IsError {
+		errLine := toolErrorContent(sty, opts.Result, width)
+		return strings.Join([]string{header, "", errLine, "", diffContent, "", summaryLine}, "\n")
+	}
+
+	return joinToolParts(header, diffContent+"\n\n"+summaryLine)
+}
+
+// countPatchFiles counts the number of file sections in a unified diff patch.
+func countPatchFiles(patch string) int {
+	if patch == "" {
+		return 0
+	}
+	count := 0
+	lines := strings.Split(patch, "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "--- ") {
+			count++
+		}
+	}
+	return count
+}

@@ -474,6 +474,11 @@ func (w *ClientWorkspace) Resolver() config.VariableResolver {
 	return config.IdentityResolver()
 }
 
+func (w *ClientWorkspace) ReloadConfig(ctx context.Context) error {
+	w.refreshWorkspace()
+	return nil
+}
+
 // -- Config mutations --
 
 func (w *ClientWorkspace) UpdatePreferredModel(scope config.Scope, modelType config.SelectedModelType, model config.SelectedModel) error {

@@ -334,6 +334,10 @@ func (w *AppWorkspace) Resolver() config.VariableResolver {
 	return w.store.Resolver()
 }
 
+func (w *AppWorkspace) ReloadConfig(ctx context.Context) error {
+	return w.store.ReloadFromDisk(ctx)
+}
+
 // -- Config mutations --
 
 func (w *AppWorkspace) UpdatePreferredModel(scope config.Scope, modelType config.SelectedModelType, model config.SelectedModel) error {
