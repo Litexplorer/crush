@@ -49,27 +49,12 @@ func NewFileFinderTool(workingDir string) fantasy.AgentTool {
 	)
 }
 
-// findFiles tries fd, then find to search for files matching the pattern.
-// If root is empty, it also tries locate first for system-wide search.
+// findFiles uses locate to search for files matching the pattern.
+// locate uses a prebuilt database for fast system-wide searches.
 func findFiles(pattern, root, workingDir string, limit int) string {
-	if root == "" {
-		// No root constraint — try locate first (fastest, uses system index)
-		if out, ok := tryLocate(pattern); ok {
-			return formatResults(truncateLines(out, limit), "locate")
-		}
-		root = workingDir
+	if out, ok := tryLocate(pattern); ok {
+		return formatResults(truncateLines(out, limit))
 	}
-
-	// Try fd next (fast, respects .gitignore)
-	if out, ok := tryFd(pattern, root); ok {
-		return formatResults(truncateLines(out, limit), "fd")
-	}
-
-	// Fall back to find (always available)
-	if out, ok := tryFind(pattern, root); ok {
-		return formatResults(truncateLines(out, limit), "find")
-	}
-
 	return ""
 }
 
@@ -87,33 +72,9 @@ func tryLocate(pattern string) (string, bool) {
 	return strings.TrimSpace(string(out)), true
 }
 
-func tryFd(pattern, root string) (string, bool) {
-	if _, err := exec.LookPath("fd"); err != nil {
-		return "", false
-	}
-
-	cmd := exec.Command("fd", "--type", "f", pattern, root)
-	out, err := cmd.Output()
-	if err != nil || len(out) == 0 {
-		return "", false
-	}
-
-	return strings.TrimSpace(string(out)), true
-}
-
-func tryFind(pattern, root string) (string, bool) {
-	cmd := exec.Command("find", root, "-name", pattern, "-type", "f")
-	out, err := cmd.Output()
-	if err != nil || len(out) == 0 {
-		return "", false
-	}
-
-	return strings.TrimSpace(string(out)), true
-}
-
-func formatResults(output, tool string) string {
+func formatResults(output string) string {
 	var b strings.Builder
-	b.WriteString("<results tool=\"" + tool + "\">\n")
+	b.WriteString("<results>\n")
 	b.WriteString(output)
 	b.WriteString("\n</results>")
 	return b.String()
