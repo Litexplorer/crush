@@ -1,1 +1,1 @@
-Search for files on the filesystem by name or glob pattern. Tries locate first (fastest, uses system index), then fd (modern find alternative), and falls back to find. Returns matching file paths, truncated to limit (default 200).
+Search for files on the filesystem by name or glob pattern using locate (fast, uses prebuilt database). Returns matching file paths, truncated to limit (default 200).
