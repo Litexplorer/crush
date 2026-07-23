@@ -52,13 +52,13 @@ func NewFileFinderTool(workingDir string) fantasy.AgentTool {
 // findFiles uses locate to search for files matching the pattern.
 // locate uses a prebuilt database for fast system-wide searches.
 func findFiles(pattern, root, workingDir string, limit int) string {
-	if out, ok := tryLocate(pattern); ok {
+	if out, ok := tryLocate(pattern, root); ok {
 		return formatResults(truncateLines(out, limit))
 	}
 	return ""
 }
 
-func tryLocate(pattern string) (string, bool) {
+func tryLocate(pattern, root string) (string, bool) {
 	if _, err := exec.LookPath("locate"); err != nil {
 		return "", false
 	}
@@ -69,7 +69,23 @@ func tryLocate(pattern string) (string, bool) {
 		return "", false
 	}
 
-	return strings.TrimSpace(string(out)), true
+	result := strings.TrimSpace(string(out))
+
+	if root != "" {
+		lines := strings.Split(result, "\n")
+		var filtered []string
+		for _, line := range lines {
+			if strings.HasPrefix(line, root) {
+				filtered = append(filtered, line)
+			}
+		}
+		if len(filtered) == 0 {
+			return "", false
+		}
+		result = strings.Join(filtered, "\n")
+	}
+
+	return result, true
 }
 
 func formatResults(output string) string {
