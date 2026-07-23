@@ -349,7 +349,11 @@ func (w *AppWorkspace) SetCompactMode(scope config.Scope, enabled bool) error {
 }
 
 func (w *AppWorkspace) SetProviderAPIKey(scope config.Scope, providerID string, apiKey any) error {
-	return w.store.SetProviderAPIKey(scope, providerID, apiKey)
+	if err := w.store.SetProviderAPIKey(scope, providerID, apiKey); err != nil {
+		return err
+	}
+	w.store.SignalAuthComplete(providerID)
+	return nil
 }
 
 func (w *AppWorkspace) SetConfigField(scope config.Scope, key string, value any) error {
@@ -425,6 +429,10 @@ func (w *AppWorkspace) ReadMCPResource(ctx context.Context, name, uri string) ([
 		}
 	}
 	return result, nil
+}
+
+func (w *AppWorkspace) ListMCPPrompts(context.Context) ([]commands.MCPPrompt, error) {
+	return commands.LoadMCPPrompts()
 }
 
 func (w *AppWorkspace) GetMCPPrompt(clientID, promptID string, args map[string]string) (string, error) {
