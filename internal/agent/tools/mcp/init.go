@@ -58,7 +58,45 @@ var (
 	broker   = pubsub.NewBroker[Event]()
 	initOnce sync.Once
 	initDone = make(chan struct{})
+
+	// initStarted records whether Initialize has been armed. WaitForInit only
+	// blocks once initialization is expected; coordinators built outside app
+	// startup never arm it and so must not wait forever.
+	initMu      sync.Mutex
+	initStarted bool
+
+	// renewMus serializes lazy session renewals per server so concurrent tool
+	// calls cannot race to rebuild the same session.
+	renewMusMu sync.Mutex
+	renewMus   = map[string]*sync.Mutex{}
+
+	// newSession creates a client session. It is a seam so tests can exercise
+	// renewal concurrency without spawning a real transport.
+	newSession = createSession
 )
+
+// ArmInit marks that MCP initialization is expected so WaitForInit blocks
+// until it completes. Call this synchronously before launching Initialize in a
+// goroutine; otherwise WaitForInit could observe the not-yet-started state and
+// return early, letting the tool list be read before MCP tools register.
+func ArmInit() {
+	initMu.Lock()
+	initStarted = true
+	initMu.Unlock()
+}
+
+// renewLock returns the per-server mutex used to serialize session renewals,
+// creating it on first use.
+func renewLock(name string) *sync.Mutex {
+	renewMusMu.Lock()
+	defer renewMusMu.Unlock()
+	mu, ok := renewMus[name]
+	if !ok {
+		mu = &sync.Mutex{}
+		renewMus[name] = mu
+	}
+	return mu
+}
 
 // State represents the current state of an MCP client
 type State int
@@ -93,6 +131,10 @@ const (
 	EventToolsListChanged
 	EventPromptsListChanged
 	EventResourcesListChanged
+	// EventChannelMessage is published when a channel server pushes a
+	// notifications/claude/channel event. ChannelMessage carries the rendered,
+	// escaped <channel> element ready for injection into the session.
+	EventChannelMessage
 )
 
 // Event represents an event in the MCP system
@@ -102,6 +144,9 @@ type Event struct {
 	State  State
 	Error  error
 	Counts Counts
+	// ChannelMessage is set only for EventChannelMessage: the fully rendered
+	// and escaped <channel>...</channel> element to inject into the session.
+	ChannelMessage string
 }
 
 // Counts number of available tools, prompts, etc.
@@ -121,9 +166,31 @@ type ClientInfo struct {
 	ConnectedAt time.Time
 }
 
-// SubscribeEvents returns a channel for MCP events
+// SubscribeEvents returns a channel for MCP events.
+//
+// Channel message events (EventChannelMessage) are excluded: they carry no
+// workspace or session identity, and the MCP broker is process-global. Without
+// this filter, every workspace that calls SubscribeEvents would receive every
+// other workspace's channel events — a cross-workspace injection path. Channel
+// delivery requires workspace-scoped routing, which is deferred to a later PR;
+// until then, channel events must not flow through the shared event fan-out.
 func SubscribeEvents(ctx context.Context) <-chan pubsub.Event[Event] {
-	return broker.Subscribe(ctx)
+	raw := broker.Subscribe(ctx)
+	filtered := make(chan pubsub.Event[Event], 64)
+	go func() {
+		defer close(filtered)
+		for ev := range raw {
+			if ev.Payload.Type == EventChannelMessage {
+				continue
+			}
+			select {
+			case filtered <- ev:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return filtered
 }
 
 // GetStates returns the current state of all MCP clients
@@ -164,6 +231,7 @@ func Close(ctx context.Context) error {
 
 // Initialize initializes MCP clients based on the provided configuration.
 func Initialize(ctx context.Context, permissions permission.Service, cfg *config.ConfigStore) {
+	ArmInit()
 	slog.Info("Initializing MCP clients")
 	var wg sync.WaitGroup
 	// Initialize states for all configured MCPs
@@ -203,9 +271,18 @@ func Initialize(ctx context.Context, permissions permission.Service, cfg *config
 	initOnce.Do(func() { close(initDone) })
 }
 
-// WaitForInit blocks until MCP initialization is complete.
-// If Initialize was never called, this returns immediately.
+// WaitForInit blocks until MCP initialization is complete, i.e. until
+// Initialize has finished and closed initDone. If initialization was never
+// armed (ArmInit was not called, e.g. a coordinator built outside app
+// startup), there is nothing to wait for and this returns nil immediately
+// rather than blocking until ctx is cancelled.
 func WaitForInit(ctx context.Context) error {
+	initMu.Lock()
+	started := initStarted
+	initMu.Unlock()
+	if !started {
+		return nil
+	}
 	select {
 	case <-initDone:
 		return nil
@@ -236,16 +313,16 @@ func initClient(ctx context.Context, cfg *config.ConfigStore, name string, m con
 	updateState(name, StateStarting, nil, nil, Counts{})
 
 	// createSession handles its own timeout internally.
-	session, err := createSession(ctx, name, m, resolver)
+	session, err := createSession(ctx, name, m, resolver, channelEnabled(cfg.Overrides().EnabledChannels, name))
 	if err != nil {
 		return err
 	}
 
-	tools, err := getTools(ctx, session)
+	toolCount, err := registerSessionTools(ctx, cfg, name, session)
 	if err != nil {
 		slog.Error("Error listing tools", "error", err)
 		updateState(name, StateError, err, nil, Counts{})
-		session.Close()
+		closeSession(name, session)
 		return err
 	}
 
@@ -253,11 +330,10 @@ func initClient(ctx context.Context, cfg *config.ConfigStore, name string, m con
 	if err != nil {
 		slog.Error("Error listing prompts", "error", err)
 		updateState(name, StateError, err, nil, Counts{})
-		session.Close()
+		closeSession(name, session)
 		return err
 	}
 
-	toolCount := updateTools(cfg, name, tools)
 	updatePrompts(name, prompts)
 	sessions.Set(name, session)
 
@@ -271,15 +347,8 @@ func initClient(ctx context.Context, cfg *config.ConfigStore, name string, m con
 
 // DisableSingle disables and closes a single MCP client by name.
 func DisableSingle(cfg *config.ConfigStore, name string) error {
-	session, ok := sessions.Get(name)
-	if ok {
-		if err := session.Close(); err != nil &&
-			!errors.Is(err, io.EOF) &&
-			!errors.Is(err, context.Canceled) &&
-			err.Error() != "signal: killed" {
-			slog.Warn("Error closing MCP session", "name", name, "error", err)
-		}
-		sessions.Del(name)
+	if session, ok := sessions.Take(name); ok {
+		closeSession(name, session)
 	}
 
 	// Clear tools and prompts for this MCP.
@@ -294,31 +363,106 @@ func DisableSingle(cfg *config.ConfigStore, name string) error {
 }
 
 func getOrRenewClient(ctx context.Context, cfg *config.ConfigStore, name string) (*ClientSession, error) {
+	m := cfg.Config().MCP[name]
+	timeout := mcpTimeout(m)
+
+	// Fast path: reuse a healthy session without taking the renewal lock.
+	if sess, ok := sessions.Get(name); ok {
+		if err := pingSession(ctx, sess, timeout); err == nil {
+			return sess, nil
+		}
+	}
+
+	// Serialize renewals per server. Two concurrent tool calls can both
+	// observe a dead session and race to rebuild it: one may close the
+	// session the other just registered, or overwrite and leak a live
+	// replacement. Under this lock only the first arrival rebuilds; later
+	// arrivals re-check and reuse the healthy result.
+	mu := renewLock(name)
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Under the lock the map is stable: any in-flight renewal has finished and
+	// either re-registered its session or failed and left none. A renewal
+	// removes the session transiently (StateError takes it before rebuilding),
+	// so this check must happen here rather than before the lock — otherwise a
+	// caller arriving mid-renewal sees no session and wrongly reports the
+	// server unavailable.
 	sess, ok := sessions.Get(name)
 	if !ok {
 		return nil, fmt.Errorf("mcp '%s' not available", name)
 	}
 
-	m := cfg.Config().MCP[name]
-	state, _ := states.Get(name)
-
-	timeout := mcpTimeout(m)
-	pingCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	err := sess.Ping(pingCtx, nil)
-	if err == nil {
+	// A concurrent goroutine may have already renewed the session while we
+	// waited for the lock. Reuse it if it is now healthy.
+	pingErr := pingSession(ctx, sess, timeout)
+	if pingErr == nil {
 		return sess, nil
 	}
-	updateState(name, StateError, maybeTimeoutErr(err, timeout), nil, state.Counts)
 
-	sess, err = createSession(ctx, name, m, cfg.Resolver())
+	state, _ := states.Get(name)
+	// StateError closes the dead session and clears its tools, prompts, and
+	// resources from the registry.
+	updateState(name, StateError, maybeTimeoutErr(pingErr, timeout), nil, state.Counts)
+
+	newSess, err := newSession(ctx, name, m, cfg.Resolver(), channelEnabled(cfg.Overrides().EnabledChannels, name))
 	if err != nil {
 		return nil, err
 	}
 
-	updateState(name, StateConnected, nil, sess, state.Counts)
-	sessions.Set(name, sess)
-	return sess, nil
+	// StateError cleared this server's tools, prompts, and resources from the
+	// registry. Re-list and re-register them all on the fresh session and
+	// recompute the counts from what actually registered; otherwise the agent
+	// reconnects but the registries stay empty (the next tool call fails with
+	// "tool not found") while the reported counts still advertise capabilities
+	// that are no longer there.
+	var counts Counts
+	counts.Tools, err = registerSessionTools(ctx, cfg, name, newSess)
+	if err != nil {
+		updateState(name, StateError, err, nil, Counts{})
+		closeSession(name, newSess)
+		return nil, err
+	}
+
+	prompts, err := getPrompts(ctx, newSess)
+	if err != nil {
+		updateState(name, StateError, err, nil, Counts{})
+		closeSession(name, newSess)
+		return nil, err
+	}
+	updatePrompts(name, prompts)
+	counts.Prompts = len(prompts)
+
+	resources, err := getResources(ctx, newSess)
+	if err != nil {
+		updateState(name, StateError, err, nil, Counts{})
+		closeSession(name, newSess)
+		return nil, err
+	}
+	counts.Resources = updateResources(name, resources)
+
+	sessions.Set(name, newSess)
+	updateState(name, StateConnected, nil, newSess, counts)
+	return newSess, nil
+}
+
+// pingSession pings a session with the server's configured timeout.
+func pingSession(ctx context.Context, s *ClientSession, timeout time.Duration) error {
+	pingCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return s.Ping(pingCtx, nil)
+}
+
+// closeSession closes an MCP session, logging only unexpected errors. EOF,
+// context cancellation, and a killed child are the ordinary result of tearing
+// a session down and are not worth surfacing.
+func closeSession(name string, s *ClientSession) {
+	if err := s.Close(); err != nil &&
+		!errors.Is(err, io.EOF) &&
+		!errors.Is(err, context.Canceled) &&
+		err.Error() != "signal: killed" {
+		slog.Warn("Error closing MCP session", "name", name, "error", err)
+	}
 }
 
 // updateState updates the state of an MCP client and publishes an event
@@ -334,7 +478,23 @@ func updateState(name string, state State, err error, client *ClientSession, cou
 	case StateConnected:
 		info.ConnectedAt = time.Now()
 	case StateError:
-		sessions.Del(name)
+		// A session that has errored is dead to us. Atomically remove it and
+		// close it so the child process and its stdio pipes are released — the
+		// bare map delete this used to do leaked both. Clearing the tool
+		// registry keeps the agent from advertising tools it can no longer
+		// call: without it, crush_info / the `/mcp` menu and the tool list
+		// handed to the LLM diverge, so a server still reads "connected, N
+		// tools" while every call fails with "tool not found".
+		if old, ok := sessions.Take(name); ok {
+			closeSession(name, old)
+		}
+		// Drop every registry entry for the dead server. Leaving prompts or
+		// resources behind lets a disconnected server keep advertising
+		// capabilities the agent can no longer fulfil, the same divergence the
+		// tool clear prevents.
+		allTools.Del(name)
+		allPrompts.Del(name)
+		allResources.Del(name)
 	}
 	states.Set(name, info)
 
@@ -348,12 +508,12 @@ func updateState(name string, state State, err error, client *ClientSession, cou
 	})
 }
 
-func createSession(ctx context.Context, name string, m config.MCPConfig, resolver config.VariableResolver) (*ClientSession, error) {
+func createSession(ctx context.Context, name string, m config.MCPConfig, resolver config.VariableResolver, channelOptIn bool) (*ClientSession, error) {
 	timeout := mcpTimeout(m)
 	mcpCtx, cancel := context.WithCancel(ctx)
 	cancelTimer := time.AfterFunc(timeout, cancel)
 
-	transport, err := createTransport(mcpCtx, m, resolver)
+	transport, err := createTransport(mcpCtx, m, resolver, cancelTimer)
 	if err != nil {
 		updateState(name, StateError, err, nil, Counts{})
 		slog.Error("Error creating MCP client", "error", err, "name", name)
@@ -361,6 +521,15 @@ func createSession(ctx context.Context, name string, m config.MCPConfig, resolve
 		cancelTimer.Stop()
 		return nil, err
 	}
+
+	// Wrap the transport so channel notifications can be intercepted. The
+	// gate starts undecided: notifications that arrive during capability
+	// negotiation are buffered. After Connect resolves, the gate is opened
+	// (and the buffer drained) only when the server declares the channel
+	// capability AND was opted in via --channels; otherwise it is closed
+	// (buffer discarded). This prevents early notifications from being lost.
+	channelGate := newChannelGate()
+	transport = &channelTransport{inner: transport, name: name, gate: channelGate}
 
 	client := mcp.NewClient(
 		&mcp.Implementation{
@@ -406,6 +575,22 @@ func createSession(ctx context.Context, name string, m config.MCPConfig, resolve
 
 	cancelTimer.Stop()
 	slog.Debug("MCP client initialized", "name", name)
+
+	// Resolve the channel gate: open only for a server that both declares
+	// the claude/channel capability and was opted in via --channels.
+	// Otherwise close it (fail closed). Resolving drains buffered messages
+	// that arrived during negotiation so a fast server does not lose early
+	// events.
+	if channelOptIn && hasChannelCapability(session.InitializeResult()) {
+		buffered := channelGate.resolve(true)
+		for _, raw := range buffered {
+			publishChannelMessage(mcpCtx, name, raw)
+		}
+		slog.Info("MCP channel enabled", "name", name, "buffered", len(buffered))
+	} else {
+		channelGate.resolve(false)
+	}
+
 	return &ClientSession{session, cancel}, nil
 }
 
@@ -437,7 +622,7 @@ func maybeTimeoutErr(err error, timeout time.Duration) error {
 	return err
 }
 
-func createTransport(ctx context.Context, m config.MCPConfig, resolver config.VariableResolver) (mcp.Transport, error) {
+func createTransport(ctx context.Context, m config.MCPConfig, resolver config.VariableResolver, connTimeout *time.Timer) (mcp.Transport, error) {
 	switch m.Type {
 	case config.MCPStdio:
 		command, err := resolver.ResolveValue(m.Command)
@@ -457,6 +642,12 @@ func createTransport(ctx context.Context, m config.MCPConfig, resolver config.Va
 		}
 		cmd := exec.CommandContext(ctx, home.Long(command), args...)
 		cmd.Env = append(os.Environ(), envs...)
+		// Run the child in its own process group and kill the whole group when
+		// the session context is cancelled. A stdio server often spawns its own
+		// children (signal-mcp launches signal-cli); os/exec's default
+		// cancellation kills only the direct child, orphaning the rest with
+		// PPID 1 — production accumulated 15+ such zombies over two days.
+		configureStdioProcess(cmd)
 		return &mcp.CommandTransport{
 			Command: cmd,
 		}, nil
@@ -477,10 +668,27 @@ func createTransport(ctx context.Context, m config.MCPConfig, resolver config.Va
 				headers: headers,
 			},
 		}
-		return &mcp.StreamableClientTransport{
+		transport := &mcp.StreamableClientTransport{
 			Endpoint:   url,
 			HTTPClient: client,
-		}, nil
+		}
+		// Enable OAuth for HTTP servers that don't have a static
+		// Authorization header. This allows browser-based OAuth flows
+		// (e.g. Cairn, other MCP servers using OIDC) to work
+		// automatically: on 401, the SDK opens a browser for the user
+		// to authenticate, captures the callback, and retries.
+		//
+		// The interactive flow can take far longer than the connection
+		// timeout, so hand the handler a way to suspend that timeout once
+		// authorization actually begins.
+		if !hasAuthHeader(headers) {
+			var stopConnTimeout func()
+			if connTimeout != nil {
+				stopConnTimeout = func() { connTimeout.Stop() }
+			}
+			transport.OAuthHandler = newMCPOAuthHandler(url, stopConnTimeout)
+		}
+		return transport, nil
 	case config.MCPSSE:
 		url, err := m.ResolvedURL(resolver)
 		if err != nil {
@@ -509,6 +717,18 @@ func createTransport(ctx context.Context, m config.MCPConfig, resolver config.Va
 
 type headerRoundTripper struct {
 	headers map[string]string
+}
+
+// hasAuthHeader reports whether the headers map contains an
+// Authorization key (case-insensitive). When true, the server is
+// using static bearer-token auth and the OAuth handler is skipped.
+func hasAuthHeader(headers map[string]string) bool {
+	for k := range headers {
+		if strings.EqualFold(k, "Authorization") {
+			return true
+		}
+	}
+	return false
 }
 
 func (rt headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
