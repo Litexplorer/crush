@@ -250,18 +250,18 @@ func NewViewTool(
 			waitForLSPDiagnostics(ctx, lspManager, filePath, 300*time.Millisecond)
 
 			outline := ""
-			codegraph := ""
+			// codegraph := ""
 			if params.Offset <= 0 {
 				outline = getOutline(ctx, lspManager, filePath)
-				codegraph = getCodegraphImpact(ctx, lspManager, filePath)
+				// codegraph = getCodegraphImpact(ctx, lspManager, filePath)
 			}
 			output := ""
 			if outline != "" {
 				output += outline + "\n"
 			}
-			if codegraph != "" {
-				output += codegraph + "\n"
-			}
+			// if codegraph != "" {
+			// 	output += codegraph + "\n"
+			// }
 			output += "<file>\n"
 			output += addLineNumbers(content, params.Offset+1)
 
