@@ -3967,16 +3967,20 @@ func (m *UI) sendMessage(content string, attachments ...message.Attachment) tea.
 	}
 
 	// Reload config from disk so the new session picks up any
-	// external modifications to crush.json.
-	cmds = append(cmds, func() tea.Msg {
-		if err := m.com.Workspace.ReloadConfig(context.Background()); err != nil {
-			return util.InfoMsg{
-				Type: util.InfoTypeError,
-				Msg:  fmt.Sprintf("config reload failed: %v", err),
+	// external modifications to crush.json. Skip in local mode
+	// to avoid syncing model changes between TUI instances sharing
+	// the same working directory.
+	if v, _ := strconv.ParseBool(os.Getenv("CRUSH_CLIENT_SERVER")); v {
+		cmds = append(cmds, func() tea.Msg {
+			if err := m.com.Workspace.ReloadConfig(context.Background()); err != nil {
+				return util.InfoMsg{
+					Type: util.InfoTypeError,
+					Msg:  fmt.Sprintf("config reload failed: %v", err),
+				}
 			}
-		}
-		return nil
-	})
+			return nil
+		})
+	}
 
 	ctx := context.Background()
 	cmds = append(cmds, func() tea.Msg {
@@ -4041,16 +4045,20 @@ func (m *UI) runShellCommandInternal(command string, isFirstMessage bool) tea.Cm
 		m.setState(uiChat, m.focus)
 
 		// Reload config before shell execution to pick up any
-		// external modifications to crush.json.
-		cmds = append(cmds, func() tea.Msg {
-			if err := m.com.Workspace.ReloadConfig(context.Background()); err != nil {
-				return util.InfoMsg{
-					Type: util.InfoTypeError,
-					Msg:  fmt.Sprintf("config reload failed: %v", err),
+		// external modifications to crush.json. Skip in local
+		// mode to avoid syncing model changes between TUI
+		// instances sharing the same working directory.
+		if v, _ := strconv.ParseBool(os.Getenv("CRUSH_CLIENT_SERVER")); v {
+			cmds = append(cmds, func() tea.Msg {
+				if err := m.com.Workspace.ReloadConfig(context.Background()); err != nil {
+					return util.InfoMsg{
+						Type: util.InfoTypeError,
+						Msg:  fmt.Sprintf("config reload failed: %v", err),
+					}
 				}
-			}
-			return nil
-		})
+				return nil
+			})
+		}
 
 		// Defer shell execution until loadSessionMsg fires so the chat
 		// list is stable before we add items or start streaming.
