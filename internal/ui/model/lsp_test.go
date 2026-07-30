@@ -5,25 +5,25 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/charmbracelet/crush/internal/app"
 	"github.com/charmbracelet/crush/internal/lsp"
+	"github.com/charmbracelet/crush/internal/workspace"
 )
 
 func TestSortLSPsByActivation(t *testing.T) {
 	t.Parallel()
 
-	mk := func(name string, state lsp.ServerState) app.LSPClientInfo {
-		return app.LSPClientInfo{Name: name, State: state}
+	mk := func(name string, state lsp.ServerState) workspace.LSPClientInfo {
+		return workspace.LSPClientInfo{Name: name, State: state}
 	}
 
 	tests := []struct {
 		name string
-		in   []app.LSPClientInfo
+		in   []workspace.LSPClientInfo
 		want []string
 	}{
 		{
 			name: "active states (Ready, Starting) sort before inactive",
-			in: []app.LSPClientInfo{
+			in: []workspace.LSPClientInfo{
 				mk("zebra", lsp.StateUnstarted),
 				mk("alpha", lsp.StateReady),
 				mk("mango", lsp.StateStarting),
@@ -33,7 +33,7 @@ func TestSortLSPsByActivation(t *testing.T) {
 		},
 		{
 			name: "active group sorted alphabetically by name",
-			in: []app.LSPClientInfo{
+			in: []workspace.LSPClientInfo{
 				mk("gopls", lsp.StateReady),
 				mk("rust-analyzer", lsp.StateReady),
 				mk("tsserver", lsp.StateStarting),
@@ -42,17 +42,17 @@ func TestSortLSPsByActivation(t *testing.T) {
 		},
 		{
 			name: "inactive group sorted alphabetically by name",
-			in: []app.LSPClientInfo{
+			in: []workspace.LSPClientInfo{
 				mk("zulu", lsp.StateStopped),
 				mk("alpha", lsp.StateUnstarted),
 				mk("mike", lsp.StateDisabled),
 				mk("bravo", lsp.StateError),
 			},
-			want: []string{"alpha", "bravo", "mike", "zulu"},
+			want: []string{"bravo", "zulu", "alpha", "mike"},
 		},
 		{
 			name: "single active mixed with single inactive",
-			in: []app.LSPClientInfo{
+			in: []workspace.LSPClientInfo{
 				mk("zulu", lsp.StateStopped),
 				mk("alpha", lsp.StateReady),
 			},
@@ -65,16 +65,16 @@ func TestSortLSPsByActivation(t *testing.T) {
 		},
 		{
 			name: "all inactive preserves alphabetical order",
-			in: []app.LSPClientInfo{
+			in: []workspace.LSPClientInfo{
 				mk("charlie", lsp.StateError),
 				mk("alpha", lsp.StateUnstarted),
 				mk("bravo", lsp.StateStopped),
 			},
-			want: []string{"alpha", "bravo", "charlie"},
+			want: []string{"charlie", "bravo", "alpha"},
 		},
 		{
 			name: "Starting counts as active even without Ready",
-			in: []app.LSPClientInfo{
+			in: []workspace.LSPClientInfo{
 				mk("alpha", lsp.StateError),
 				mk("bravo", lsp.StateStarting),
 			},

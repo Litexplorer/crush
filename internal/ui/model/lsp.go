@@ -20,17 +20,26 @@ func isActiveLSPState(s lsp.ServerState) bool {
 	return s == lsp.StateReady || s == lsp.StateStarting
 }
 
-// sortLSPs orders LSP clients with active states (Ready, Starting) first and
-// otherwise sorts alphabetically by name.
+// lspStateOrder defines the sort priority for LSP server states in the TUI
+// list. Lower numbers appear first; active states (Ready, Starting) come
+// before inactive ones. Within the same state, entries sort alphabetically.
+var lspStateOrder = map[lsp.ServerState]int{
+	lsp.StateReady:     0,
+	lsp.StateStarting:  1,
+	lsp.StateError:     2,
+	lsp.StateStopped:   3,
+	lsp.StateUnstarted: 4,
+	lsp.StateDisabled:  5,
+}
+
+// sortLSPs orders LSP clients by state priority (active first) and
+// alphabetically by name within the same state group.
 func sortLSPs(in iter.Seq[workspace.LSPClientInfo]) []workspace.LSPClientInfo {
 	return slices.SortedFunc(in, func(a, b workspace.LSPClientInfo) int {
-		aActive := isActiveLSPState(a.State)
-		bActive := isActiveLSPState(b.State)
-		if aActive != bActive {
-			if aActive {
-				return -1
-			}
-			return 1
+		orderA := lspStateOrder[a.State]
+		orderB := lspStateOrder[b.State]
+		if orderA != orderB {
+			return orderA - orderB
 		}
 		return strings.Compare(a.Name, b.Name)
 	})
@@ -49,9 +58,7 @@ func (m *UI) lspInfo(width, maxItems int, isSection bool) string {
 
 	// Always pull fresh state to avoid race with async TrackConfigured.
 	m.lspStates = m.com.Workspace.LSPGetStates()
-	states := slices.SortedFunc(maps.Values(m.lspStates), func(a, b workspace.LSPClientInfo) int {
-		return strings.Compare(a.Name, b.Name)
-	})
+	states := sortLSPs(maps.Values(m.lspStates))
 
 	var lsps []LSPInfo
 	for _, state := range states {
