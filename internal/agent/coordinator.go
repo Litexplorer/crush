@@ -742,6 +742,7 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 		allTools = append(
 			allTools,
 			tools.NewDiagnosticsTool(c.lspManager),
+			tools.NewOutlineTool(c.lspManager),
 			tools.NewReferencesTool(c.lspManager),
 			tools.NewLSPRestartTool(c.lspManager),
 			tools.NewSymbolsTool(c.lspManager),
