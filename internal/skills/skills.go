@@ -11,8 +11,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/charlievieth/fastwalk"
 	"github.com/charmbracelet/crush/internal/pubsub"
@@ -24,6 +26,10 @@ const (
 	MaxNameLength          = 64
 	MaxDescriptionLength   = 1024
 	MaxCompatibilityLength = 500
+	// MaxPromptDescriptionLength caps how much of a skill description is
+	// injected into the system prompt. Full descriptions are still available
+	// on demand via FormatInvocation when the skill is actually loaded.
+	MaxPromptDescriptionLength = 200
 )
 
 var (
@@ -215,6 +221,69 @@ func Discover(paths []string) []*Skill {
 	return skills
 }
 
+// discoveryCacheEntry memoizes a discovery result keyed by its fingerprint so
+// repeated prompt builds (every turn) skip re-parsing unchanged skill files.
+type discoveryCacheEntry struct {
+	fingerprint string
+	skills      []*Skill
+}
+
+var (
+	discoveryCacheMu sync.Mutex
+	discoveryCache   = make(map[string]*discoveryCacheEntry)
+)
+
+// DiscoverCached returns skills for paths, reusing the previous parse result
+// when no SKILL.md file under the paths has changed. The fingerprint walk only
+// stats files, so cache hits avoid the full read/parse/validate pass that
+// Discover performs. It is safe for concurrent use.
+func DiscoverCached(paths []string) []*Skill {
+	key := strings.Join(paths, "\x00")
+	discoveryCacheMu.Lock()
+	defer discoveryCacheMu.Unlock()
+	fingerprint := fingerprintPaths(paths)
+	if entry, ok := discoveryCache[key]; ok && entry.fingerprint == fingerprint {
+		return entry.skills
+	}
+	skills := Discover(paths)
+	discoveryCache[key] = &discoveryCacheEntry{
+		fingerprint: fingerprint,
+		skills:      skills,
+	}
+	return skills
+}
+
+// fingerprintPaths walks each root and records every SKILL.md file's path,
+// size, and modification time. It deliberately avoids reading file contents,
+// making it far cheaper than full discovery. Adding, removing, editing, or
+// re-symlinking a skill file all change the fingerprint.
+func fingerprintPaths(paths []string) string {
+	var sb strings.Builder
+	for _, base := range paths {
+		conf := fastwalk.Config{
+			Follow:  true,
+			ToSlash: fastwalk.DefaultToSlash(),
+		}
+		_ = fastwalk.Walk(&conf, base, func(path string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() || d.Name() != SkillFileName {
+				return nil
+			}
+			info, err := d.Info()
+			if err != nil {
+				return nil
+			}
+			sb.WriteString(path)
+			sb.WriteByte('\x00')
+			sb.WriteString(strconv.FormatInt(info.Size(), 10))
+			sb.WriteByte(':')
+			sb.WriteString(strconv.FormatInt(info.ModTime().UnixNano(), 10))
+			sb.WriteByte('\n')
+			return nil
+		})
+	}
+	return sb.String()
+}
+
 // DiscoverWithStates finds all valid skills in the given paths and also
 // returns a per-file state slice describing parse/validation outcomes. Useful
 // for diagnostics and UI reporting.
@@ -310,7 +379,7 @@ func ToPromptXML(skills []*Skill) string {
 		}
 		sb.WriteString("  <skill>\n")
 		fmt.Fprintf(&sb, "    <name>%s</name>\n", escape(s.Name))
-		fmt.Fprintf(&sb, "    <description>%s</description>\n", escape(s.Description))
+		fmt.Fprintf(&sb, "    <description>%s</description>\n", escape(truncateDescription(s.Description)))
 		fmt.Fprintf(&sb, "    <location>%s</location>\n", escape(s.SkillFilePath))
 		if s.Builtin {
 			sb.WriteString("    <type>builtin</type>\n")
@@ -319,6 +388,18 @@ func ToPromptXML(skills []*Skill) string {
 	}
 	sb.WriteString("</available_skills>")
 	return sb.String()
+}
+
+// truncateDescription shortens a skill description to MaxPromptDescriptionLength
+// runes, appending an ellipsis when cut, so verbose descriptions do not burn
+// tokens on every turn. Truncation is rune-safe and preserves the leading
+// trigger words that guide skill selection.
+func truncateDescription(s string) string {
+	runes := []rune(s)
+	if len(runes) <= MaxPromptDescriptionLength {
+		return s
+	}
+	return string(runes[:MaxPromptDescriptionLength]) + "…"
 }
 
 // FormatInvocation generates XML for a skill when invoked as a user command.
@@ -378,13 +459,23 @@ func Deduplicate(all []*Skill) []*Skill {
 }
 
 // ApproxTokenCount returns a rough estimate of how many tokens a string
-// occupies when sent to an LLM. Uses the common ~4-chars-per-token heuristic
-// that approximates GPT/Claude tokenizers well enough for diagnostic logging.
+// occupies when sent to an LLM. ASCII text is estimated with the common
+// ~4-chars-per-token heuristic, while non-ASCII runes (CJK, accented letters,
+// emoji) are weighted closer to one token per rune because tokenizers pack
+// those characters far more densely.
 func ApproxTokenCount(s string) int {
 	if s == "" {
 		return 0
 	}
-	return (len(s) + 3) / 4
+	var ascii, nonASCII int
+	for _, r := range s {
+		if r < utf8.RuneSelf {
+			ascii++
+		} else {
+			nonASCII++
+		}
+	}
+	return (ascii+3)/4 + nonASCII
 }
 
 // Filter removes skills whose names appear in the disabled list.

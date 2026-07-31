@@ -296,6 +296,67 @@ func TestDiscoverMissingPath(t *testing.T) {
 	require.Empty(t, skills)
 }
 
+func TestDiscoverCached(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	skillDir := filepath.Join(tmpDir, "cached-skill")
+	require.NoError(t, os.MkdirAll(skillDir, 0o755))
+	skillFile := filepath.Join(skillDir, "SKILL.md")
+	require.NoError(t, os.WriteFile(skillFile, []byte(`---
+name: cached-skill
+description: First description.
+---
+# Cached Skill
+`), 0o644))
+
+	paths := []string{tmpDir}
+
+	first := DiscoverCached(paths)
+	require.Len(t, first, 1)
+	require.Equal(t, "cached-skill", first[0].Name)
+
+	// Cache hit: same slice is returned without re-parsing.
+	second := DiscoverCached(paths)
+	require.Len(t, second, 1)
+	require.Same(t, first[0], second[0])
+
+	// Editing the file (different size guarantees a different fingerprint)
+	// invalidates the cache and returns freshly parsed skills.
+	require.NoError(t, os.WriteFile(skillFile, []byte(`---
+name: cached-skill
+description: Second description, which is notably longer than the first one.
+---
+# Cached Skill (updated)
+`), 0o644))
+
+	third := DiscoverCached(paths)
+	require.Len(t, third, 1)
+	require.Equal(t, "Second description, which is notably longer than the first one.", third[0].Description)
+	require.NotSame(t, first[0], third[0])
+}
+
+func TestToPromptXMLDescriptionTruncation(t *testing.T) {
+	t.Parallel()
+
+	long := strings.Repeat("word ", 100) // 500 chars, exceeds MaxPromptDescriptionLength
+	skills := []*Skill{
+		{Name: "chatty-skill", Description: long, SkillFilePath: "/skills/chatty/SKILL.md"},
+		{Name: "short-skill", Description: "Short description.", SkillFilePath: "/skills/short/SKILL.md"},
+	}
+
+	xml := ToPromptXML(skills)
+
+	// The truncated description is escaped into the XML, and the ellipsis
+	// marks where the cut happened.
+	truncated := truncateDescription(long)
+	require.Contains(t, xml, "<description>"+escape(truncated)+"</description>")
+	require.Contains(t, xml, "<description>Short description.</description>")
+	require.Equal(t, len([]rune(truncated)), MaxPromptDescriptionLength+1) // max runes + ellipsis
+	require.True(t, strings.HasSuffix(truncated, "…"))
+	require.Less(t, len([]rune(truncated)), len([]rune(long)))
+}
+
 func TestToPromptXML(t *testing.T) {
 	t.Parallel()
 

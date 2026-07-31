@@ -23,6 +23,31 @@ func TestUsageIsZero(t *testing.T) {
 	require.False(t, usageIsZero(fantasy.Usage{CacheReadTokens: 1}))
 }
 
+func TestApproxTokenCountWeightsNonASCII(t *testing.T) {
+	t.Parallel()
+
+	// Pure ASCII keeps the ~4-chars-per-token heuristic.
+	require.Equal(t, int64(0), approxTokenCount(""))
+	require.Equal(t, int64(1), approxTokenCount("a"))
+	require.Equal(t, int64(1), approxTokenCount("abcd"))
+	require.Equal(t, int64(2), approxTokenCount("abcde"))
+	require.Equal(t, int64(3), approxTokenCount("abcdefghijkl"))
+
+	// CJK text is far denser than ASCII in real tokenizers: 4 Chinese
+	// characters (12 UTF-8 bytes) would have been estimated as 3 tokens
+	// by the byte heuristic, but is realistically ~4 tokens.
+	require.Equal(t, int64(4), approxTokenCount("你好世界"))
+
+	// Mixed content: "hello 世界" = 6 ASCII chars (2 tokens) + 2 CJK runes (2 tokens).
+	require.Equal(t, int64(4), approxTokenCount("hello 世界"))
+
+	// Mixed input estimates should never be lower than the old byte-based
+	// heuristic for the same string.
+	for _, s := range []string{"hello 世界", "你好世界", "混合代码中文字符串abc", "héllo wörld", "🎉🎉"} {
+		require.GreaterOrEqual(t, approxTokenCount(s), int64((len(s)+3)/4), "string %q", s)
+	}
+}
+
 func TestFallbackStepUsageKeepsProviderUsage(t *testing.T) {
 	t.Parallel()
 
