@@ -69,7 +69,7 @@ func ThemeFromJSON(data []byte) (Styles, error) {
 
 		destructive: lipgloss.Color(p.Error),
 		error:       lipgloss.Color(p.Error),
-		denied:      blend(p.Error, p.Neutral, 0.3),
+		attention:    blend(p.Error, p.Neutral, 0.3),
 
 		warning:       lipgloss.Color(p.Warning),
 		warningSubtle: blend(p.Warning, p.Neutral, 0.3),

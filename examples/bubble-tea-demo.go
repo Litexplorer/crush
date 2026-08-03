@@ -3,8 +3,8 @@ package main
 import (
 	"fmt"
 
-	tea "github.com/charmbracelet/bubbletea/v2"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 var (
@@ -45,7 +45,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) View() string {
+func (m model) View() tea.View {
 	s := titleStyle.Render("Select an option:") + "\n\n"
 
 	for i, choice := range m.choices {
@@ -62,7 +62,7 @@ func (m model) View() string {
 		s += descStyle.Render(cursor+choice+selected) + "\n"
 	}
 
-	return s
+	return tea.NewView(s)
 }
 
 func main() {
