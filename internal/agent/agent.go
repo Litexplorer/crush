@@ -145,7 +145,7 @@ type SessionAgent interface {
 	QueuedPrompts(sessionID string) int
 	QueuedPromptsList(sessionID string) []string
 	ClearQueue(sessionID string)
-	Summarize(context.Context, string, fantasy.ProviderOptions) error
+	Summarize(context.Context, string, fantasy.ProviderOptions, func(context.Context, *fantasy.ProviderError) error) error
 	Model() Model
 	GenerateTitle(ctx context.Context, sessionID, userPrompt string)
 }
@@ -992,6 +992,16 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 				finishReason = message.FinishReasonEndTurn
 			case fantasy.FinishReasonToolCalls:
 				finishReason = message.FinishReasonToolUse
+			case fantasy.FinishReasonContentFilter:
+				// Provider safety classifier stopped the model
+				// (Anthropic stop_reason=refusal, OpenAI content_filter).
+				// The TUI owns the display copy; we only persist the
+				// reason so the UI can show a REFUSED banner.
+				finishReason = message.FinishReasonContentFilter
+				slog.Warn("Provider content filter stopped the model",
+					"session_id", call.SessionID,
+					"finish_reason", string(stepResult.FinishReason),
+				)
 			}
 			// If a tool result halted the turn (e.g. a hook halt or a
 			// permission denial), the step ends on FinishReasonToolCalls but
@@ -1184,7 +1194,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 
 	if shouldSummarize {
 		a.activeRequests.Del(call.SessionID)
-		if summarizeErr := a.Summarize(genCtx, call.SessionID, call.ProviderOptions); summarizeErr != nil {
+		if summarizeErr := a.Summarize(genCtx, call.SessionID, call.ProviderOptions, call.OnAuthRefresh); summarizeErr != nil {
 			return nil, summarizeErr
 		}
 		// If the agent wasn't done...
@@ -1319,7 +1329,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	return a.Run(ctx, firstQueuedMessage)
 }
 
-func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fantasy.ProviderOptions) error {
+func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fantasy.ProviderOptions, onAuthRefresh func(context.Context, *fantasy.ProviderError) error) error {
 	if a.IsSessionBusy(sessionID) {
 		return ErrSessionBusy
 	}
@@ -1376,6 +1386,10 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 		Messages:        aiMsgs,
 		Headers:         sessionHeaders(sessionID),
 		ProviderOptions: opts,
+		OnAuthRefresh:   onAuthRefresh,
+		ModelProvider: func() fantasy.LanguageModel {
+			return a.largeModel.Get().Model
+		},
 		PrepareStep: func(callContext context.Context, options fantasy.PrepareStepFunctionOptions) (_ context.Context, prepared fantasy.PrepareStepResult, err error) {
 			prepared.Messages = options.Messages
 			if systemPromptPrefix != "" {
