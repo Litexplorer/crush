@@ -120,10 +120,27 @@ func (c *scriptedCoordinator) GenerateTitle(context.Context, string, string) {}
 var _ agent.Coordinator = (*scriptedCoordinator)(nil)
 
 // captureClient is an acpsdk.Client that records every session update
-// notification it receives; the remaining methods are no-ops.
+// notification and client-directed request it receives; the remaining
+// methods are no-ops. The reply functions let tests script client
+// behavior; when unset, requests default to a safe no-op / rejection.
 type captureClient struct {
 	mu      sync.Mutex
 	updates []acpsdk.SessionNotification
+
+	permissionReply func(acpsdk.RequestPermissionRequest) (acpsdk.RequestPermissionResponse, error)
+	readReply       func(acpsdk.ReadTextFileRequest) (acpsdk.ReadTextFileResponse, error)
+	writeReply      func(acpsdk.WriteTextFileRequest) (acpsdk.WriteTextFileResponse, error)
+
+	createTerminalReply  func(acpsdk.CreateTerminalRequest) (acpsdk.CreateTerminalResponse, error)
+	terminalOutputReply  func(acpsdk.TerminalOutputRequest) (acpsdk.TerminalOutputResponse, error)
+	waitTerminalReply    func(acpsdk.WaitForTerminalExitRequest) (acpsdk.WaitForTerminalExitResponse, error)
+	killTerminalReply    func(acpsdk.KillTerminalRequest) (acpsdk.KillTerminalResponse, error)
+	releaseTerminalReply func(acpsdk.ReleaseTerminalRequest) (acpsdk.ReleaseTerminalResponse, error)
+
+	permissionRequests []acpsdk.RequestPermissionRequest
+	readRequests       []acpsdk.ReadTextFileRequest
+	writeRequests      []acpsdk.WriteTextFileRequest
+	terminalRequests   []string
 }
 
 func (c *captureClient) SessionUpdate(_ context.Context, params acpsdk.SessionNotification) error {
@@ -133,36 +150,85 @@ func (c *captureClient) SessionUpdate(_ context.Context, params acpsdk.SessionNo
 	return nil
 }
 
-func (c *captureClient) ReadTextFile(context.Context, acpsdk.ReadTextFileRequest) (acpsdk.ReadTextFileResponse, error) {
+func (c *captureClient) ReadTextFile(_ context.Context, params acpsdk.ReadTextFileRequest) (acpsdk.ReadTextFileResponse, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.readRequests = append(c.readRequests, params)
+	if c.readReply != nil {
+		return c.readReply(params)
+	}
 	return acpsdk.ReadTextFileResponse{}, nil
 }
 
-func (c *captureClient) WriteTextFile(context.Context, acpsdk.WriteTextFileRequest) (acpsdk.WriteTextFileResponse, error) {
+func (c *captureClient) WriteTextFile(_ context.Context, params acpsdk.WriteTextFileRequest) (acpsdk.WriteTextFileResponse, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.writeRequests = append(c.writeRequests, params)
+	if c.writeReply != nil {
+		return c.writeReply(params)
+	}
 	return acpsdk.WriteTextFileResponse{}, nil
 }
 
-func (c *captureClient) RequestPermission(context.Context, acpsdk.RequestPermissionRequest) (acpsdk.RequestPermissionResponse, error) {
-	return acpsdk.RequestPermissionResponse{}, nil
+func (c *captureClient) CreateTerminal(_ context.Context, params acpsdk.CreateTerminalRequest) (acpsdk.CreateTerminalResponse, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.terminalRequests = append(c.terminalRequests, "create")
+	if c.createTerminalReply != nil {
+		return c.createTerminalReply(params)
+	}
+	return acpsdk.CreateTerminalResponse{TerminalId: "term-1"}, nil
 }
 
-func (c *captureClient) CreateTerminal(context.Context, acpsdk.CreateTerminalRequest) (acpsdk.CreateTerminalResponse, error) {
-	return acpsdk.CreateTerminalResponse{}, nil
-}
-
-func (c *captureClient) KillTerminal(context.Context, acpsdk.KillTerminalRequest) (acpsdk.KillTerminalResponse, error) {
+func (c *captureClient) KillTerminal(_ context.Context, params acpsdk.KillTerminalRequest) (acpsdk.KillTerminalResponse, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.terminalRequests = append(c.terminalRequests, "kill")
+	if c.killTerminalReply != nil {
+		return c.killTerminalReply(params)
+	}
 	return acpsdk.KillTerminalResponse{}, nil
 }
 
-func (c *captureClient) TerminalOutput(context.Context, acpsdk.TerminalOutputRequest) (acpsdk.TerminalOutputResponse, error) {
+func (c *captureClient) TerminalOutput(_ context.Context, params acpsdk.TerminalOutputRequest) (acpsdk.TerminalOutputResponse, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.terminalRequests = append(c.terminalRequests, "output")
+	if c.terminalOutputReply != nil {
+		return c.terminalOutputReply(params)
+	}
 	return acpsdk.TerminalOutputResponse{}, nil
 }
 
-func (c *captureClient) ReleaseTerminal(context.Context, acpsdk.ReleaseTerminalRequest) (acpsdk.ReleaseTerminalResponse, error) {
+func (c *captureClient) ReleaseTerminal(_ context.Context, params acpsdk.ReleaseTerminalRequest) (acpsdk.ReleaseTerminalResponse, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.terminalRequests = append(c.terminalRequests, "release")
+	if c.releaseTerminalReply != nil {
+		return c.releaseTerminalReply(params)
+	}
 	return acpsdk.ReleaseTerminalResponse{}, nil
 }
 
-func (c *captureClient) WaitForTerminalExit(context.Context, acpsdk.WaitForTerminalExitRequest) (acpsdk.WaitForTerminalExitResponse, error) {
+func (c *captureClient) WaitForTerminalExit(_ context.Context, params acpsdk.WaitForTerminalExitRequest) (acpsdk.WaitForTerminalExitResponse, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.terminalRequests = append(c.terminalRequests, "wait")
+	if c.waitTerminalReply != nil {
+		return c.waitTerminalReply(params)
+	}
 	return acpsdk.WaitForTerminalExitResponse{}, nil
+}
+
+func (c *captureClient) RequestPermission(_ context.Context, params acpsdk.RequestPermissionRequest) (acpsdk.RequestPermissionResponse, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.permissionRequests = append(c.permissionRequests, params)
+	if c.permissionReply != nil {
+		return c.permissionReply(params)
+	}
+	// Default: reject (cancelled outcome).
+	return acpsdk.RequestPermissionResponse{Outcome: acpsdk.NewRequestPermissionOutcomeCancelled()}, nil
 }
 
 var _ acpsdk.Client = (*captureClient)(nil)

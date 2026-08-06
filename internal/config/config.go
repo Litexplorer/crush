@@ -803,6 +803,7 @@ func allToolNames() []string {
 		"question",
 		"sourcegraph",
 		"todos",
+		"terminal",
 		"view",
 		"write",
 		"list_mcp_resources",

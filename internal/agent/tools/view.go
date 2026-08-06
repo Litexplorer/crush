@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"charm.land/fantasy"
+	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/filepathext"
 	"github.com/charmbracelet/crush/internal/filetracker"
 	"github.com/charmbracelet/crush/internal/lsp"
@@ -94,6 +95,7 @@ func NewViewTool(
 	filetracker filetracker.Service,
 	skillTracker *skills.Tracker,
 	workingDir string,
+	fileClient config.FileClient,
 	skillsPaths ...string,
 ) fantasy.AgentTool {
 	return fantasy.NewAgentTool(
@@ -152,6 +154,32 @@ func NewViewTool(
 				}
 				if !granted {
 					return NewPermissionDeniedResponse(), nil
+				}
+			}
+
+			// Prefer a client-attached file system for reads (US-014): the
+			// client's view may include unsaved buffers. Any client error
+			// falls back to the local file system below.
+			if fileClient != nil {
+				line := params.Offset + 1
+				limit := params.Limit
+				if limit <= 0 {
+					if isSkillFile {
+						limit = 1000000 // Effectively no limit for skill files
+					} else {
+						limit = DefaultReadLimit
+					}
+				}
+				if content, clientErr := fileClient.ReadTextFile(ctx, sessionID, absFilePath, &line, &limit); clientErr == nil {
+					if !utf8.ValidString(content) {
+						return fantasy.NewTextErrorResponse("File content is not valid UTF-8"), nil
+					}
+					output := "<file>\n" + addLineNumbers(content, params.Offset+1) + "\n</file>\n"
+					filetracker.RecordRead(ctx, sessionID, filePath)
+					return fantasy.WithResponseMetadata(
+						fantasy.NewTextResponse(output),
+						ViewResponseMetadata{FilePath: filePath, Content: content},
+					), nil
 				}
 			}
 

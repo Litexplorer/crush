@@ -18,37 +18,44 @@ func newTestAgent() *Agent {
 	return NewAgent(backend.New(context.Background(), nil, nil), "")
 }
 
-// stubMethodError asserts that an unimplemented method returns a
-// MethodNotFound JSON-RPC error rather than panicking or succeeding.
-func stubMethodError(t *testing.T, err error, method string) {
-	t.Helper()
-	require.Error(t, err)
-	var re *acpsdk.RequestError
-	require.True(t, errors.As(err, &re))
-	require.Equal(t, -32601, re.Code)
-	require.Contains(t, re.Message, "Method not found")
-	require.Equal(t, method, re.Data.(map[string]any)["method"])
-}
-
-func TestAgentStubReturnsMethodNotFound(t *testing.T) {
+// TestP3MethodsHandleInvalidInputs covers the P3 methods (US-010..012)
+// on a fresh agent with no sessions: they must return well-formed
+// errors, never MethodNotFound or panics.
+func TestP3MethodsHandleInvalidInputs(t *testing.T) {
 	ctx := context.Background()
 	a := newTestAgent()
 
-	t.Run("authenticate", func(t *testing.T) {
-		_, err := a.Authenticate(ctx, acpsdk.AuthenticateRequest{})
-		stubMethodError(t, err, acpsdk.AgentMethodAuthenticate)
+	assertRequestError := func(t *testing.T, err error, code int) {
+		t.Helper()
+		require.Error(t, err)
+		var re *acpsdk.RequestError
+		require.True(t, errors.As(err, &re))
+		require.Equal(t, code, re.Code)
+	}
+
+	t.Run("authenticate unknown method", func(t *testing.T) {
+		_, err := a.Authenticate(ctx, acpsdk.AuthenticateRequest{MethodId: "nope"})
+		assertRequestError(t, err, -32602)
 	})
-	t.Run("logout", func(t *testing.T) {
+
+	t.Run("authenticate known method", func(t *testing.T) {
+		_, err := a.Authenticate(ctx, acpsdk.AuthenticateRequest{MethodId: authMethodID})
+		require.NoError(t, err)
+	})
+
+	t.Run("logout without sessions", func(t *testing.T) {
 		_, err := a.Logout(ctx, acpsdk.LogoutRequest{})
-		stubMethodError(t, err, acpsdk.AgentMethodLogout)
+		require.NoError(t, err)
 	})
-	t.Run("setSessionConfigOption", func(t *testing.T) {
+
+	t.Run("setSessionMode unknown session", func(t *testing.T) {
+		_, err := a.SetSessionMode(ctx, acpsdk.SetSessionModeRequest{SessionId: "sess_nope", ModeId: modeNormal})
+		assertRequestError(t, err, -32002)
+	})
+
+	t.Run("setSessionConfigOption without value", func(t *testing.T) {
 		_, err := a.SetSessionConfigOption(ctx, acpsdk.SetSessionConfigOptionRequest{})
-		stubMethodError(t, err, acpsdk.AgentMethodSessionSetConfigOption)
-	})
-	t.Run("setSessionMode", func(t *testing.T) {
-		_, err := a.SetSessionMode(ctx, acpsdk.SetSessionModeRequest{})
-		stubMethodError(t, err, acpsdk.AgentMethodSessionSetMode)
+		assertRequestError(t, err, -32602)
 	})
 }
 

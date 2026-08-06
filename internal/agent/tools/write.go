@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"charm.land/fantasy"
+	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/diff"
 	"github.com/charmbracelet/crush/internal/filepathext"
 	"github.com/charmbracelet/crush/internal/filetracker"
@@ -49,6 +50,7 @@ func NewWriteTool(
 	files history.Service,
 	filetracker filetracker.Service,
 	workingDir string,
+	fileClient config.FileClient,
 ) fantasy.AgentTool {
 	return fantasy.NewAgentTool(
 		WriteToolName,
@@ -134,9 +136,18 @@ func NewWriteTool(
 				return resp, nil
 			}
 
-			err = os.WriteFile(filePath, []byte(params.Content), 0o644)
-			if err != nil {
-				return fantasy.ToolResponse{}, fmt.Errorf("error writing file: %w", err)
+			// Prefer a client-attached file system for writes (US-014);
+			// fall back to the local file system on client errors.
+			if fileClient != nil {
+				if err := fileClient.WriteTextFile(ctx, sessionID, filePath, params.Content); err != nil {
+					if werr := os.WriteFile(filePath, []byte(params.Content), 0o644); werr != nil {
+						return fantasy.ToolResponse{}, fmt.Errorf("error writing file: %w", werr)
+					}
+				}
+			} else {
+				if err := os.WriteFile(filePath, []byte(params.Content), 0o644); err != nil {
+					return fantasy.ToolResponse{}, fmt.Errorf("error writing file: %w", err)
+				}
 			}
 
 			// Check if file exists in history

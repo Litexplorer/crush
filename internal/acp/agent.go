@@ -6,6 +6,7 @@ package acp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,9 +17,11 @@ import (
 	"time"
 
 	"github.com/charmbracelet/crush/internal/agent"
+	mcptools "github.com/charmbracelet/crush/internal/agent/tools/mcp"
 	"github.com/charmbracelet/crush/internal/backend"
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/message"
+	"github.com/charmbracelet/crush/internal/permission"
 	"github.com/charmbracelet/crush/internal/proto"
 	"github.com/charmbracelet/crush/internal/version"
 	acpsdk "github.com/coder/acp-go-sdk"
@@ -43,15 +46,23 @@ type Agent struct {
 	mu                 sync.Mutex
 	sessions           map[acpsdk.SessionId]*session
 	clientCapabilities acpsdk.ClientCapabilities
+
+	// workspaceMCPs records the MCP server names registered per
+	// workspace from client-declared session requests (US-015), so they
+	// can be removed when the last session on the workspace closes.
+	workspaceMCPs map[string][]string
 }
 
 // session holds per-session state: the backend workspace backing it,
 // the crush session ID created in that workspace, plus mode and config
-// options staged for P3 (setSessionMode / setSessionConfigOption).
+// options (setSessionMode / setSessionConfigOption). modeCancel cancels
+// the session's permission watcher when the mode changes or the session
+// closes.
 type session struct {
 	workspace     *backend.Workspace
 	sessionID     string
 	mode          acpsdk.SessionModeId
+	modeCancel    context.CancelFunc
 	configOptions []acpsdk.SessionConfigOption
 }
 
@@ -63,11 +74,55 @@ var _ acpsdk.AgentLoader = (*Agent)(nil)
 // history; it may be empty when only live-session operations are used.
 func NewAgent(b *backend.Backend, dataDir string) *Agent {
 	return &Agent{
-		backend:  b,
-		dataDir:  dataDir,
-		clientID: uuid.New().String(),
-		sessions: make(map[acpsdk.SessionId]*session),
+		backend:       b,
+		dataDir:       dataDir,
+		clientID:      uuid.New().String(),
+		sessions:      make(map[acpsdk.SessionId]*session),
+		workspaceMCPs: make(map[string][]string),
 	}
+}
+
+// ACP session modes map onto crush's permission model:
+//
+//	modePlan   "plan"   -> read-only: every permission request for the
+//	                       session is denied.
+//	modeNormal "normal" -> the default: permission requests are
+//	                       forwarded to the ACP client for approval.
+//	modeYolo   "yolo"   -> skip permission checks; every request is
+//	                       granted.
+const (
+	modePlan   acpsdk.SessionModeId = "plan"
+	modeNormal acpsdk.SessionModeId = "normal"
+	modeYolo   acpsdk.SessionModeId = "yolo"
+)
+
+// availableModes is advertised in initialize and returned with session
+// responses so clients can offer a mode picker.
+var availableModes = []acpsdk.SessionMode{
+	{Id: modePlan, Name: "Plan", Description: acpsdk.Ptr("Read-only: permission requests are denied")},
+	{Id: modeNormal, Name: "Normal", Description: acpsdk.Ptr("Default: permission requests are sent to the client for approval")},
+	{Id: modeYolo, Name: "YOLO", Description: acpsdk.Ptr("Skip permission checks")},
+}
+
+// session config option IDs: the whitelist enforced by
+// SetSessionConfigOption.
+const (
+	configOptionMode  acpsdk.SessionConfigId = "mode"
+	configOptionModel acpsdk.SessionConfigId = "model"
+)
+
+func defaultMode() acpsdk.SessionModeId { return modeNormal }
+
+func isValidMode(m acpsdk.SessionModeId) bool {
+	switch m {
+	case modePlan, modeNormal, modeYolo:
+		return true
+	}
+	return false
+}
+
+func modeState(m acpsdk.SessionModeId) *acpsdk.SessionModeState {
+	return &acpsdk.SessionModeState{AvailableModes: availableModes, CurrentModeId: m}
 }
 
 // registryDataDir resolves the data directory whose database holds the
@@ -111,7 +166,24 @@ func (a *Agent) resolvedDataDir() string {
 // with the agent itself as its peer, so this must be called immediately
 // after acpsdk.NewAgentSideConnection.
 func (a *Agent) Attach(conn *acpsdk.AgentSideConnection) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.conn = conn
+}
+
+// connection returns the attached agent-side connection, if any.
+func (a *Agent) connection() *acpsdk.AgentSideConnection {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.conn
+}
+
+// fsCapabilities returns the attached connection and the file system
+// capabilities the client advertised during initialize.
+func (a *Agent) fsCapabilities() (*acpsdk.AgentSideConnection, acpsdk.FileSystemCapabilities) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.conn, a.clientCapabilities.Fs
 }
 
 func (a *Agent) setClientCapabilities(c acpsdk.ClientCapabilities) {
@@ -120,8 +192,22 @@ func (a *Agent) setClientCapabilities(c acpsdk.ClientCapabilities) {
 	a.clientCapabilities = c
 }
 
+// authMethodID is the single authentication method the agent offers.
+// Authentication itself is out-of-band, like the reference client: the
+// user runs `crush login` in a terminal and the provider credentials
+// land in the shared config, which the agent picks up on the next run.
+// authenticate just validates the requested method ID.
+const authMethodID = "crush-login"
+
+// Authenticate accepts the out-of-band auth method advertised in
+// initialize. Unknown methods are rejected with InvalidParams.
 func (a *Agent) Authenticate(ctx context.Context, params acpsdk.AuthenticateRequest) (acpsdk.AuthenticateResponse, error) {
-	return acpsdk.AuthenticateResponse{}, acpsdk.NewMethodNotFound(acpsdk.AgentMethodAuthenticate)
+	if params.MethodId != authMethodID {
+		return acpsdk.AuthenticateResponse{}, acpsdk.NewInvalidParams(map[string]any{
+			"error": fmt.Sprintf("unknown auth method: %s", params.MethodId),
+		})
+	}
+	return acpsdk.AuthenticateResponse{}, nil
 }
 
 func (a *Agent) Initialize(ctx context.Context, params acpsdk.InitializeRequest) (acpsdk.InitializeResponse, error) {
@@ -147,16 +233,54 @@ func (a *Agent) Initialize(ctx context.Context, params acpsdk.InitializeRequest)
 				Resume: &acpsdk.SessionResumeCapabilities{},
 			},
 			LoadSession: true,
+			Auth: acpsdk.AgentAuthCapabilities{
+				Logout: &acpsdk.LogoutCapabilities{},
+			},
+			// MCP servers declared by the client in session requests are
+			// registered into crush's own MCP pipeline (US-015). The
+			// MCP-over-ACP transport is not offered: SDK v0.13.5 has no
+			// mcp/message dispatch.
+			McpCapabilities: acpsdk.McpCapabilities{Http: true, Sse: true},
 		},
 		AgentInfo: &acpsdk.Implementation{
 			Name:    "Crush",
 			Version: version.Version,
 		},
+		AuthMethods: []acpsdk.AuthMethod{
+			{Agent: &acpsdk.AuthMethodAgent{
+				Id:          authMethodID,
+				Name:        "Login with crush",
+				Description: acpsdk.Ptr("Run `crush login` in your terminal to authenticate with a provider"),
+			}},
+		},
 	}, nil
 }
 
+// Logout clears the stored provider credentials, mirroring `crush
+// logout`. It is connection-scoped: it clears credentials through each
+// live workspace's config store; out-of-band `crush login` restores
+// them.
 func (a *Agent) Logout(ctx context.Context, params acpsdk.LogoutRequest) (acpsdk.LogoutResponse, error) {
-	return acpsdk.LogoutResponse{}, acpsdk.NewMethodNotFound(acpsdk.AgentMethodLogout)
+	a.mu.Lock()
+	stores := make(map[*config.ConfigStore]struct{})
+	for _, s := range a.sessions {
+		if s.workspace != nil && s.workspace.Cfg != nil {
+			stores[s.workspace.Cfg] = struct{}{}
+		}
+	}
+	a.mu.Unlock()
+
+	for store := range stores {
+		for _, key := range []string{
+			"providers.hyper.api_key",
+			"providers.hyper.oauth",
+			"providers.copilot.api_key",
+			"providers.copilot.oauth",
+		} {
+			_ = store.RemoveConfigField(config.ScopeGlobal, key)
+		}
+	}
+	return acpsdk.LogoutResponse{}, nil
 }
 
 func (a *Agent) Cancel(ctx context.Context, params acpsdk.CancelNotification) error {
@@ -181,9 +305,23 @@ func (a *Agent) CloseSession(ctx context.Context, params acpsdk.CloseSessionRequ
 		return acpsdk.CloseSessionResponse{}, resourceNotFound(fmt.Sprintf("session not found: %s", params.SessionId))
 	}
 	delete(a.sessions, params.SessionId)
+	a.stopPermissionWatcherLocked(sess)
 	ws := sess.workspace
 	sessionID := sess.sessionID
+	lastOnWorkspace := true
+	for _, remaining := range a.sessions {
+		if remaining.workspace.ID == ws.ID {
+			lastOnWorkspace = false
+			break
+		}
+	}
 	a.mu.Unlock()
+
+	// Client-declared MCP servers (US-015) are removed once the last
+	// session on the workspace closes, so nothing lingers.
+	if lastOnWorkspace {
+		a.unregisterMcpServers(ctx, ws)
+	}
 
 	// Treat close like session/cancel: cancel any in-flight prompt work
 	// for this session, then release the workspace claim so it tears
@@ -212,6 +350,7 @@ func (a *Agent) CloseAll() {
 			sessionID:   s.sessionID,
 			coordinator: s.workspace.AgentCoordinator,
 		})
+		a.stopPermissionWatcherLocked(s)
 		delete(a.sessions, id)
 	}
 	a.mu.Unlock()
@@ -384,12 +523,35 @@ func (a *Agent) NewSession(ctx context.Context, params acpsdk.NewSessionRequest)
 		return acpsdk.NewSessionResponse{}, acpsdk.NewInternalError(map[string]any{"error": err.Error()})
 	}
 
+	// Route file reads and writes through the ACP client (US-014)
+	// when it advertises file system support; tools fall back to the
+	// local file system otherwise.
+	if ws.Cfg != nil {
+		ws.Cfg.Overrides().FileClient = &fileClient{a: a}
+		// Client-declared MCP servers join the workspace's MCP pipeline
+		// (US-015); a client terminal runner exposes the terminal tool
+		// (US-016).
+		a.registerMcpServers(ctx, ws, params.McpServers)
+		if a.clientSupportsTerminal() {
+			ws.Cfg.Overrides().TerminalRunner = &terminalClient{a: a}
+		}
+	}
+
 	sessionID := acpsdk.SessionId(crushSess.ID)
 	a.mu.Lock()
-	a.sessions[sessionID] = &session{workspace: ws, sessionID: crushSess.ID}
+	sess := &session{workspace: ws, sessionID: crushSess.ID, mode: defaultMode()}
+	sess.configOptions = a.sessionConfigOptionsLocked(sess)
+	a.startPermissionWatcherLocked(sess, sess.mode)
+	a.sessions[sessionID] = sess
+	opts := sess.configOptions
+	mode := sess.mode
 	a.mu.Unlock()
 
-	return acpsdk.NewSessionResponse{SessionId: sessionID}, nil
+	return acpsdk.NewSessionResponse{
+		SessionId:     sessionID,
+		ConfigOptions: opts,
+		Modes:         modeState(mode),
+	}, nil
 }
 
 // validateCwd checks that cwd is an absolute path to an existing
@@ -426,9 +588,8 @@ func (a *Agent) Prompt(ctx context.Context, params acpsdk.PromptRequest) (acpsdk
 		return acpsdk.PromptResponse{}, acpsdk.NewInternalError(map[string]any{"error": "agent not initialized"})
 	}
 
-	// Permission requests are auto-approved for this session for now;
-	// client-side permission requests arrive in US-013.
-	ws.Permissions.AutoApproveSession(sess.sessionID)
+	// Permission requests are resolved by the session's mode watcher
+	// (see applyMode): plan denies them, normal and yolo grant them.
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -515,34 +676,42 @@ func (a *Agent) LoadSession(ctx context.Context, params acpsdk.LoadSessionReques
 	if err := validateCwd(params.Cwd); err != nil {
 		return acpsdk.LoadSessionResponse{}, err
 	}
-	if err := a.activateSession(ctx, params.Cwd, params.SessionId); err != nil {
+	sess, err := a.activateSession(ctx, params.Cwd, params.SessionId, params.McpServers)
+	if err != nil {
 		return acpsdk.LoadSessionResponse{}, err
 	}
-	return acpsdk.LoadSessionResponse{}, nil
+	a.mu.Lock()
+	opts := sess.configOptions
+	mode := sess.mode
+	a.mu.Unlock()
+	return acpsdk.LoadSessionResponse{ConfigOptions: opts, Modes: modeState(mode)}, nil
 }
 
 // activateSession makes a persisted session live again: it validates
 // the registry mapping and cwd, recreates the backing workspace,
 // verifies the crush session still exists, and registers the session
 // for subsequent prompts. Loading an already-live session is a no-op.
-func (a *Agent) activateSession(ctx context.Context, cwd string, sessionID acpsdk.SessionId) error {
+func (a *Agent) activateSession(ctx context.Context, cwd string, sessionID acpsdk.SessionId, servers []acpsdk.McpServer) (*session, error) {
 	a.mu.Lock()
 	_, ok := a.sessions[sessionID]
 	a.mu.Unlock()
 	if ok {
-		return nil
+		a.mu.Lock()
+		sess := a.sessions[sessionID]
+		a.mu.Unlock()
+		return sess, nil
 	}
 
 	dataDir := a.registryDataDir(ctx, cwd)
 	if dataDir == "" {
-		return resourceNotFound(fmt.Sprintf("session not found: %s", sessionID))
+		return nil, resourceNotFound(fmt.Sprintf("session not found: %s", sessionID))
 	}
 	rec, err := getRegistry(ctx, dataDir, string(sessionID))
 	if err != nil {
-		return acpsdk.NewInternalError(map[string]any{"error": err.Error()})
+		return nil, acpsdk.NewInternalError(map[string]any{"error": err.Error()})
 	}
 	if rec == nil || filepath.Clean(rec.cwd) != filepath.Clean(cwd) {
-		return resourceNotFound(fmt.Sprintf("session not found: %s", sessionID))
+		return nil, resourceNotFound(fmt.Sprintf("session not found: %s", sessionID))
 	}
 
 	ws, _, err := a.backend.CreateWorkspace(proto.Workspace{
@@ -552,23 +721,37 @@ func (a *Agent) activateSession(ctx context.Context, cwd string, sessionID acpsd
 		Env:      os.Environ(),
 	})
 	if err != nil {
-		return acpsdk.NewInternalError(map[string]any{"error": err.Error()})
+		return nil, acpsdk.NewInternalError(map[string]any{"error": err.Error()})
 	}
 	if err := a.backend.AttachClient(ws.ID, a.clientID); err != nil {
 		_ = a.backend.DeleteWorkspace(ws.ID, a.clientID)
-		return acpsdk.NewInternalError(map[string]any{"error": err.Error()})
+		return nil, acpsdk.NewInternalError(map[string]any{"error": err.Error()})
 	}
 	if _, err := ws.App.Sessions.Get(ctx, string(sessionID)); err != nil {
 		// The registry row survived but the crush session is gone;
 		// release the claim we just took.
 		a.backend.DetachClient(ws.ID, a.clientID)
-		return resourceNotFound(fmt.Sprintf("session not found: %s", sessionID))
+		return nil, resourceNotFound(fmt.Sprintf("session not found: %s", sessionID))
+	}
+
+	// Route file reads and writes through the ACP client (US-014),
+	// same as NewSession, plus client-declared MCP servers (US-015)
+	// and the client terminal runner (US-016).
+	if ws.Cfg != nil {
+		ws.Cfg.Overrides().FileClient = &fileClient{a: a}
+		a.registerMcpServers(ctx, ws, servers)
+		if a.clientSupportsTerminal() {
+			ws.Cfg.Overrides().TerminalRunner = &terminalClient{a: a}
+		}
 	}
 
 	a.mu.Lock()
-	a.sessions[sessionID] = &session{workspace: ws, sessionID: string(sessionID)}
+	sess := &session{workspace: ws, sessionID: string(sessionID), mode: defaultMode()}
+	sess.configOptions = a.sessionConfigOptionsLocked(sess)
+	a.startPermissionWatcherLocked(sess, sess.mode)
+	a.sessions[sessionID] = sess
 	a.mu.Unlock()
-	return nil
+	return sess, nil
 }
 
 // ResumeSession restores a persisted session like LoadSession. The ACP
@@ -579,16 +762,598 @@ func (a *Agent) ResumeSession(ctx context.Context, params acpsdk.ResumeSessionRe
 	if err := validateCwd(params.Cwd); err != nil {
 		return acpsdk.ResumeSessionResponse{}, err
 	}
-	if err := a.activateSession(ctx, params.Cwd, params.SessionId); err != nil {
+	sess, err := a.activateSession(ctx, params.Cwd, params.SessionId, params.McpServers)
+	if err != nil {
 		return acpsdk.ResumeSessionResponse{}, err
 	}
-	return acpsdk.ResumeSessionResponse{}, nil
+	a.mu.Lock()
+	opts := sess.configOptions
+	mode := sess.mode
+	a.mu.Unlock()
+	return acpsdk.ResumeSessionResponse{ConfigOptions: opts, Modes: modeState(mode)}, nil
 }
 
 func (a *Agent) SetSessionConfigOption(ctx context.Context, params acpsdk.SetSessionConfigOptionRequest) (acpsdk.SetSessionConfigOptionResponse, error) {
-	return acpsdk.SetSessionConfigOptionResponse{}, acpsdk.NewMethodNotFound(acpsdk.AgentMethodSessionSetConfigOption)
+	var (
+		configID  acpsdk.SessionConfigId
+		value     string
+		sessionID acpsdk.SessionId
+	)
+	switch {
+	case params.ValueId != nil:
+		configID = params.ValueId.ConfigId
+		value = string(params.ValueId.Value)
+		sessionID = params.ValueId.SessionId
+	case params.Boolean != nil:
+		configID = params.Boolean.ConfigId
+		value = strconv.FormatBool(params.Boolean.Value)
+		sessionID = params.Boolean.SessionId
+	default:
+		return acpsdk.SetSessionConfigOptionResponse{}, acpsdk.NewInvalidParams(map[string]any{"error": "config option value is required"})
+	}
+
+	a.mu.Lock()
+	sess, ok := a.sessions[sessionID]
+	a.mu.Unlock()
+	if !ok {
+		return acpsdk.SetSessionConfigOptionResponse{}, resourceNotFound(fmt.Sprintf("session not found: %s", sessionID))
+	}
+
+	switch configID {
+	case configOptionMode:
+		if params.Boolean != nil {
+			return acpsdk.SetSessionConfigOptionResponse{}, acpsdk.NewInvalidParams(map[string]any{"error": "mode expects a select value"})
+		}
+		mode := acpsdk.SessionModeId(value)
+		changed, err := a.applyMode(mode, sess)
+		if err != nil {
+			return acpsdk.SetSessionConfigOptionResponse{}, err
+		}
+		if changed {
+			a.notifyMode(ctx, sessionID, mode)
+		}
+	case configOptionModel:
+		if params.Boolean != nil {
+			return acpsdk.SetSessionConfigOptionResponse{}, acpsdk.NewInvalidParams(map[string]any{"error": "model expects a select value"})
+		}
+		if err := a.applyModel(ctx, sess, value); err != nil {
+			return acpsdk.SetSessionConfigOptionResponse{}, err
+		}
+	default:
+		return acpsdk.SetSessionConfigOptionResponse{}, acpsdk.NewInvalidParams(map[string]any{
+			"error": fmt.Sprintf("unknown config option: %s", configID),
+		})
+	}
+
+	a.mu.Lock()
+	opts := a.sessionConfigOptionsLocked(sess)
+	sess.configOptions = opts
+	a.mu.Unlock()
+
+	a.notifyConfigOptions(ctx, sessionID, opts)
+	return acpsdk.SetSessionConfigOptionResponse{ConfigOptions: opts}, nil
 }
 
 func (a *Agent) SetSessionMode(ctx context.Context, params acpsdk.SetSessionModeRequest) (acpsdk.SetSessionModeResponse, error) {
-	return acpsdk.SetSessionModeResponse{}, acpsdk.NewMethodNotFound(acpsdk.AgentMethodSessionSetMode)
+	a.mu.Lock()
+	sess, ok := a.sessions[params.SessionId]
+	a.mu.Unlock()
+	if !ok {
+		return acpsdk.SetSessionModeResponse{}, resourceNotFound(fmt.Sprintf("session not found: %s", params.SessionId))
+	}
+	changed, err := a.applyMode(params.ModeId, sess)
+	if err != nil {
+		return acpsdk.SetSessionModeResponse{}, err
+	}
+	if changed {
+		a.notifyMode(ctx, params.SessionId, params.ModeId)
+	}
+	return acpsdk.SetSessionModeResponse{}, nil
+}
+
+// applyMode validates and applies a mode change for a live session. It
+// swaps the session's permission watcher so the new mode's policy takes
+// effect immediately. It reports whether the mode actually changed.
+func (a *Agent) applyMode(mode acpsdk.SessionModeId, sess *session) (bool, error) {
+	if !isValidMode(mode) {
+		return false, acpsdk.NewInvalidParams(map[string]any{
+			"error": fmt.Sprintf("unsupported mode: %s", mode),
+		})
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if sess.mode == mode {
+		return false, nil
+	}
+	a.stopPermissionWatcherLocked(sess)
+	sess.mode = mode
+	a.startPermissionWatcherLocked(sess, mode)
+	return true, nil
+}
+
+// startPermissionWatcherLocked installs the per-session permission
+// handler (US-013): plan denies every request (read-only), yolo grants
+// every request, and normal forwards the request to the ACP client for
+// approval, denying on timeout, client error, or non-approval. Callers
+// must hold a.mu.
+func (a *Agent) startPermissionWatcherLocked(sess *session, mode acpsdk.SessionModeId) {
+	ctx, cancel := context.WithCancel(context.Background())
+	sess.modeCancel = cancel
+	events := sess.workspace.Permissions.Subscribe(ctx)
+	go func() {
+		defer cancel()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev, ok := <-events:
+				if !ok {
+					return
+				}
+				p := ev.Payload
+				if p.SessionID != sess.sessionID {
+					continue
+				}
+				switch mode {
+				case modePlan:
+					sess.workspace.Permissions.Deny(p)
+				case modeYolo:
+					sess.workspace.Permissions.Grant(p)
+				default:
+					a.forwardPermissionRequest(ctx, sess, p)
+				}
+			}
+		}
+	}()
+}
+
+// stopPermissionWatcherLocked cancels the session's permission watcher,
+// if any. Callers must hold a.mu.
+func (a *Agent) stopPermissionWatcherLocked(sess *session) {
+	if sess.modeCancel != nil {
+		sess.modeCancel()
+		sess.modeCancel = nil
+	}
+}
+
+// permissionRequestTimeout bounds how long the agent waits for the
+// client to answer a permission request before denying it. Tests may
+// shorten it.
+var permissionRequestTimeout = 5 * time.Minute
+
+// forwardPermissionRequest asks the ACP client to approve a permission
+// request (US-013). The client picks allow-once / allow-always /
+// reject; anything but an explicit allow is denied, as are timeouts and
+// client errors (safety first). With no client attached (in-process
+// use) the request is granted, matching the pre-US-013 behavior.
+func (a *Agent) forwardPermissionRequest(ctx context.Context, sess *session, p permission.PermissionRequest) {
+	conn := a.connection()
+	if conn == nil {
+		sess.workspace.Permissions.Grant(p)
+		return
+	}
+
+	req := acpsdk.RequestPermissionRequest{
+		SessionId: acpsdk.SessionId(p.SessionID),
+		ToolCall: acpsdk.ToolCallUpdate{
+			ToolCallId: acpsdk.ToolCallId(p.ToolCallID),
+			Title:      acpsdk.Ptr(permissionTitle(p)),
+			Kind:       permissionToolKind(p.Action),
+			RawInput:   p.Params,
+		},
+		Options: []acpsdk.PermissionOption{
+			{OptionId: "allow-once", Kind: acpsdk.PermissionOptionKindAllowOnce, Name: "Allow once"},
+			{OptionId: "allow-always", Kind: acpsdk.PermissionOptionKindAllowAlways, Name: "Always allow"},
+			{OptionId: "reject", Kind: acpsdk.PermissionOptionKindRejectOnce, Name: "Reject"},
+		},
+	}
+	if p.Path != "" {
+		req.ToolCall.Locations = []acpsdk.ToolCallLocation{{Path: p.Path}}
+	}
+
+	rctx, cancel := context.WithTimeout(ctx, permissionRequestTimeout)
+	defer cancel()
+	resp, err := conn.RequestPermission(rctx, req)
+	if err != nil {
+		// Timeout, client error, or disconnect: deny by default.
+		sess.workspace.Permissions.Deny(p)
+		return
+	}
+	switch {
+	case resp.Outcome.Selected != nil && resp.Outcome.Selected.OptionId == "allow-once":
+		sess.workspace.Permissions.Grant(p)
+	case resp.Outcome.Selected != nil && resp.Outcome.Selected.OptionId == "allow-always":
+		sess.workspace.Permissions.GrantPersistent(p)
+	default:
+		sess.workspace.Permissions.Deny(p)
+	}
+}
+
+// permissionTitle builds the tool call title shown in the client's
+// permission dialog.
+func permissionTitle(p permission.PermissionRequest) string {
+	if p.Description != "" {
+		return p.Description
+	}
+	return fmt.Sprintf("%s (%s)", p.ToolName, p.Action)
+}
+
+// permissionToolKind maps a crush permission action to the ACP tool
+// kind for the permission dialog.
+func permissionToolKind(action string) *acpsdk.ToolKind {
+	var k acpsdk.ToolKind
+	switch action {
+	case "read":
+		k = acpsdk.ToolKindRead
+	case "write":
+		k = acpsdk.ToolKindEdit
+	case "execute":
+		k = acpsdk.ToolKindExecute
+	default:
+		k = acpsdk.ToolKindOther
+	}
+	return &k
+}
+
+// fileClient routes file reads and writes to the ACP client when it
+// advertises file system support (US-014). Tools reach it through the
+// config.RuntimeOverrides.FileClient hook and fall back to local IO on
+// any error.
+type fileClient struct {
+	a *Agent
+}
+
+// errClientUnavailable is returned when no client is attached or the
+// client does not advertise the file system capability.
+var errClientUnavailable = errors.New("acp client file system is unavailable")
+
+// clientFileTimeout bounds how long a file or terminal operation waits
+// for the client before the tool falls back to the local file system.
+// Tests may shorten it.
+var clientFileTimeout = 10 * time.Second
+
+func (f *fileClient) ReadTextFile(ctx context.Context, sessionID, path string, line, limit *int) (string, error) {
+	conn, fs := f.a.fsCapabilities()
+	if conn == nil || !fs.ReadTextFile {
+		return "", errClientUnavailable
+	}
+	rctx, cancel := context.WithTimeout(ctx, clientFileTimeout)
+	defer cancel()
+	resp, err := conn.ReadTextFile(rctx, acpsdk.ReadTextFileRequest{
+		SessionId: acpsdk.SessionId(sessionID),
+		Path:      path,
+		Line:      line,
+		Limit:     limit,
+	})
+	if err != nil {
+		return "", err
+	}
+	return resp.Content, nil
+}
+
+func (f *fileClient) WriteTextFile(ctx context.Context, sessionID, path, content string) error {
+	conn, fs := f.a.fsCapabilities()
+	if conn == nil || !fs.WriteTextFile {
+		return errClientUnavailable
+	}
+	rctx, cancel := context.WithTimeout(ctx, clientFileTimeout)
+	defer cancel()
+	_, err := conn.WriteTextFile(rctx, acpsdk.WriteTextFileRequest{
+		SessionId: acpsdk.SessionId(sessionID),
+		Path:      path,
+		Content:   content,
+	})
+	return err
+}
+
+var _ config.FileClient = (*fileClient)(nil)
+
+// clientSupportsTerminal reports whether the attached client advertises
+// terminal support (US-016).
+func (a *Agent) clientSupportsTerminal() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.conn != nil && a.clientCapabilities.Terminal
+}
+
+// mcpServerToolWait bounds how long registerMcpServers waits for a
+// server's tools to register before refreshing the agent's tool list.
+// Tests may shorten it.
+var mcpServerToolWait = 15 * time.Second
+
+// registerMcpServers wires client-declared MCP servers into the
+// workspace's MCP pipeline (US-015), mirroring the reference client's
+// session-scoped server registration. stdio/http/sse servers are added
+// in memory and started; the MCP-over-ACP transport is skipped because
+// SDK v0.13.5 has no mcp/message dispatch. The agent's tool list is
+// refreshed once the servers' tools are registered so the first prompt
+// sees them.
+func (a *Agent) registerMcpServers(ctx context.Context, ws *backend.Workspace, servers []acpsdk.McpServer) {
+	if len(servers) == 0 || ws.Cfg == nil {
+		return
+	}
+	var names []string
+	for _, srv := range servers {
+		cfg, name, ok := mcpServerConfig(srv)
+		if !ok {
+			continue
+		}
+		if name == "" {
+			name = "acp-" + uuid.NewString()
+		}
+		ws.Cfg.SetMCPConfigInMemory(name, cfg)
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return
+	}
+	mcptools.Reinitialize(ctx, ws.Cfg)
+
+	// Tool registration happens asynchronously after the server connects;
+	// wait for it so the tool list refresh below is complete.
+	deadline := time.Now().Add(mcpServerToolWait)
+	for pending := len(names); pending > 0 && time.Now().Before(deadline); {
+		pending = 0
+		registered := make(map[string]bool, len(names))
+		for n := range mcptools.Tools() {
+			registered[n] = true
+		}
+		for _, name := range names {
+			if !registered[name] {
+				pending++
+			}
+		}
+		if pending > 0 {
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	_ = ws.UpdateAgentModel(ctx)
+
+	a.mu.Lock()
+	a.workspaceMCPs[ws.ID] = append(a.workspaceMCPs[ws.ID], names...)
+	a.mu.Unlock()
+}
+
+// unregisterMcpServers removes the client-declared MCP servers recorded
+// for a workspace and refreshes the agent's tools.
+func (a *Agent) unregisterMcpServers(ctx context.Context, ws *backend.Workspace) {
+	a.mu.Lock()
+	names := a.workspaceMCPs[ws.ID]
+	delete(a.workspaceMCPs, ws.ID)
+	a.mu.Unlock()
+	if len(names) == 0 || ws.Cfg == nil {
+		return
+	}
+	for _, name := range names {
+		ws.Cfg.RemoveMCPConfigInMemory(name)
+	}
+	mcptools.Reinitialize(ctx, ws.Cfg)
+	_ = ws.UpdateAgentModel(ctx)
+}
+
+// mcpServerConfig translates an ACP McpServer into a crush MCP config
+// and the server's display name. The MCP-over-ACP transport is
+// unsupported (SDK v0.13.5 gap) and is reported as not ok, so the
+// caller skips it.
+func mcpServerConfig(srv acpsdk.McpServer) (config.MCPConfig, string, bool) {
+	switch {
+	case srv.Stdio != nil:
+		env := make(map[string]string, len(srv.Stdio.Env))
+		for _, e := range srv.Stdio.Env {
+			env[e.Name] = e.Value
+		}
+		return config.MCPConfig{Type: config.MCPStdio, Command: srv.Stdio.Command, Args: srv.Stdio.Args, Env: env}, srv.Stdio.Name, true
+	case srv.Http != nil:
+		headers := make(map[string]string, len(srv.Http.Headers))
+		for _, h := range srv.Http.Headers {
+			headers[h.Name] = h.Value
+		}
+		return config.MCPConfig{Type: config.MCPHttp, URL: srv.Http.Url, Headers: headers}, srv.Http.Name, true
+	case srv.Sse != nil:
+		headers := make(map[string]string, len(srv.Sse.Headers))
+		for _, h := range srv.Sse.Headers {
+			headers[h.Name] = h.Value
+		}
+		return config.MCPConfig{Type: config.MCPSSE, URL: srv.Sse.Url, Headers: headers}, srv.Sse.Name, true
+	default:
+		// acp transport: unsupported.
+		return config.MCPConfig{}, "", false
+	}
+}
+
+// terminalClient runs commands in the ACP client's integrated terminal
+// (US-016). It implements config.TerminalRunner; the terminal tool falls
+// back to the local bash tool when the client is unavailable.
+type terminalClient struct {
+	a *Agent
+}
+
+var _ config.TerminalRunner = (*terminalClient)(nil)
+
+// terminalPollInterval is how often the agent polls terminal output.
+const terminalPollInterval = 100 * time.Millisecond
+
+// RunTerminal drives the full client terminal lifecycle: create, poll
+// output until exit (or timeout, killing the terminal), then release.
+func (t *terminalClient) RunTerminal(ctx context.Context, sessionID, command string, args []string, cwd string) (string, int, error) {
+	conn := t.a.connection()
+	if conn == nil {
+		return "", -1, errClientUnavailable
+	}
+	sid := acpsdk.SessionId(sessionID)
+	rctx, cancel := context.WithTimeout(ctx, clientFileTimeout)
+	defer cancel()
+
+	createResp, err := conn.CreateTerminal(rctx, acpsdk.CreateTerminalRequest{
+		SessionId: sid,
+		Command:   command,
+		Args:      args,
+		Cwd:       &cwd,
+	})
+	if err != nil {
+		return "", -1, err
+	}
+	terminalID := createResp.TerminalId
+
+	output := ""
+	released := false
+	defer func() {
+		if released {
+			return
+		}
+		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer releaseCancel()
+		_, _ = conn.ReleaseTerminal(releaseCtx, acpsdk.ReleaseTerminalRequest{SessionId: sid, TerminalId: terminalID})
+	}()
+
+	for {
+		if rctx.Err() != nil {
+			killCtx, killCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer killCancel()
+			_, _ = conn.KillTerminal(killCtx, acpsdk.KillTerminalRequest{SessionId: sid, TerminalId: terminalID})
+			return output, -1, rctx.Err()
+		}
+		outResp, err := conn.TerminalOutput(rctx, acpsdk.TerminalOutputRequest{SessionId: sid, TerminalId: terminalID})
+		if err != nil {
+			return output, -1, err
+		}
+		if outResp.Output != "" {
+			output = outResp.Output
+		}
+		if outResp.ExitStatus != nil {
+			// The terminal exited; get its exit code, then release.
+			exitCode := 0
+			if waitResp, werr := conn.WaitForTerminalExit(rctx, acpsdk.WaitForTerminalExitRequest{SessionId: sid, TerminalId: terminalID}); werr == nil && waitResp.ExitCode != nil {
+				exitCode = *waitResp.ExitCode
+			}
+			releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer releaseCancel()
+			_, _ = conn.ReleaseTerminal(releaseCtx, acpsdk.ReleaseTerminalRequest{SessionId: sid, TerminalId: terminalID})
+			released = true
+			return output, exitCode, nil
+		}
+		select {
+		case <-rctx.Done():
+		case <-time.After(terminalPollInterval):
+		}
+	}
+}
+
+// applyModel sets the workspace's preferred large model from a
+// "provider/model" value and rebuilds the agent so the next prompt uses
+// it. The provider must exist in the config; model IDs are not further
+// validated because configured model lists can be partial.
+func (a *Agent) applyModel(ctx context.Context, sess *session, value string) error {
+	provider, model, ok := strings.Cut(value, "/")
+	if !ok || provider == "" || model == "" {
+		return acpsdk.NewInvalidParams(map[string]any{
+			"error": fmt.Sprintf("invalid model value: %q (want provider/model)", value),
+		})
+	}
+	if sess.workspace == nil || sess.workspace.Cfg == nil {
+		return acpsdk.NewInternalError(map[string]any{"error": "workspace config is unavailable"})
+	}
+	if _, ok := sess.workspace.Cfg.Config().Providers.Get(provider); !ok {
+		return acpsdk.NewInvalidParams(map[string]any{
+			"error": fmt.Sprintf("unknown provider: %s", provider),
+		})
+	}
+	if err := sess.workspace.Cfg.UpdatePreferredModel(config.ScopeWorkspace, config.SelectedModelTypeLarge, config.SelectedModel{Provider: provider, Model: model}); err != nil {
+		return acpsdk.NewInternalError(map[string]any{"error": err.Error()})
+	}
+	if err := sess.workspace.UpdateAgentModel(ctx); err != nil {
+		return acpsdk.NewInternalError(map[string]any{"error": err.Error()})
+	}
+	return nil
+}
+
+// sessionConfigOptionsLocked builds the config options advertised for a
+// session from its current mode and workspace configuration. Callers
+// must hold a.mu.
+func (a *Agent) sessionConfigOptionsLocked(sess *session) []acpsdk.SessionConfigOption {
+	mode := sess.mode
+	if mode == "" {
+		mode = defaultMode()
+	}
+	modeOpts := make(acpsdk.SessionConfigSelectOptionsUngrouped, 0, len(availableModes))
+	for _, m := range availableModes {
+		modeOpts = append(modeOpts, acpsdk.SessionConfigSelectOption{
+			Name:  m.Name,
+			Value: acpsdk.SessionConfigValueId(m.Id),
+		})
+	}
+	category := acpsdk.SessionConfigOptionCategoryMode
+	opts := []acpsdk.SessionConfigOption{
+		{
+			Select: &acpsdk.SessionConfigOptionSelect{
+				Category:     &category,
+				CurrentValue: acpsdk.SessionConfigValueId(mode),
+				Id:           configOptionMode,
+				Name:         "Mode",
+				Options:      acpsdk.SessionConfigSelectOptions{Ungrouped: &modeOpts},
+				Type:         "select",
+			},
+		},
+	}
+
+	if sess.workspace == nil || sess.workspace.Cfg == nil {
+		return opts
+	}
+	cfg := sess.workspace.Cfg.Config()
+	current := ""
+	if m, ok := cfg.Models[config.SelectedModelTypeLarge]; ok && m.Provider != "" {
+		current = m.Provider + "/" + m.Model
+	}
+	var modelOpts acpsdk.SessionConfigSelectOptionsUngrouped
+	for providerID, p := range cfg.Providers.Seq2() {
+		label := p.Name
+		if label == "" {
+			label = providerID
+		}
+		for _, m := range p.Models {
+			modelOpts = append(modelOpts, acpsdk.SessionConfigSelectOption{
+				Name:  label + " · " + m.ID,
+				Value: acpsdk.SessionConfigValueId(providerID + "/" + m.ID),
+			})
+		}
+	}
+	modelCategory := acpsdk.SessionConfigOptionCategoryModel
+	opts = append(opts, acpsdk.SessionConfigOption{
+		Select: &acpsdk.SessionConfigOptionSelect{
+			Category:     &modelCategory,
+			CurrentValue: acpsdk.SessionConfigValueId(current),
+			Id:           configOptionModel,
+			Name:         "Model",
+			Options:      acpsdk.SessionConfigSelectOptions{Ungrouped: &modelOpts},
+			Type:         "select",
+		},
+	})
+	return opts
+}
+
+// notifyMode pushes a current_mode_update notification to the client.
+func (a *Agent) notifyMode(ctx context.Context, sid acpsdk.SessionId, mode acpsdk.SessionModeId) {
+	if a.conn == nil {
+		return
+	}
+	_ = a.conn.SessionUpdate(ctx, acpsdk.SessionNotification{
+		SessionId: sid,
+		Update: acpsdk.SessionUpdate{
+			CurrentModeUpdate: &acpsdk.SessionCurrentModeUpdate{CurrentModeId: mode},
+		},
+	})
+}
+
+// notifyConfigOptions pushes a config_option_update notification to the
+// client.
+func (a *Agent) notifyConfigOptions(ctx context.Context, sid acpsdk.SessionId, opts []acpsdk.SessionConfigOption) {
+	if a.conn == nil {
+		return
+	}
+	_ = a.conn.SessionUpdate(ctx, acpsdk.SessionNotification{
+		SessionId: sid,
+		Update: acpsdk.SessionUpdate{
+			ConfigOptionUpdate: &acpsdk.SessionConfigOptionUpdate{ConfigOptions: opts},
+		},
+	})
 }

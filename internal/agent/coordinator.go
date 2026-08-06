@@ -730,9 +730,16 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 		tools.NewLsTool(c.permissions, c.cfg.WorkingDir(), c.cfg.Config().Tools.Ls),
 		tools.NewSourcegraphTool(nil),
 		tools.NewTodosTool(c.sessions),
-		tools.NewViewTool(c.lspManager, c.permissions, c.filetracker, c.skillTracker, c.cfg.WorkingDir(), c.cfg.Config().Options.SkillsPaths...),
-		tools.NewWriteTool(c.lspManager, c.permissions, c.history, c.filetracker, c.cfg.WorkingDir()),
+		tools.NewViewTool(c.lspManager, c.permissions, c.filetracker, c.skillTracker, c.cfg.WorkingDir(), c.cfg.Overrides().FileClient, c.cfg.Config().Options.SkillsPaths...),
+		tools.NewWriteTool(c.lspManager, c.permissions, c.history, c.filetracker, c.cfg.WorkingDir(), c.cfg.Overrides().FileClient),
 	)
+
+	// The terminal tool is offered only when a client terminal runner is
+	// configured (e.g. an ACP client's integrated terminal); otherwise
+	// commands run through the local bash tool.
+	if tr := c.cfg.Overrides().TerminalRunner; tr != nil {
+		allTools = append(allTools, tools.NewTerminalTool(tr, c.permissions, c.cfg.WorkingDir()))
+	}
 
 	// Question tool is interactive-only and not available to sub-agents.
 	if !isSubAgent && c.interactive {
