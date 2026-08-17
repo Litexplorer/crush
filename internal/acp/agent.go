@@ -6,6 +6,7 @@ package acp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -23,6 +24,7 @@ import (
 	"github.com/charmbracelet/crush/internal/message"
 	"github.com/charmbracelet/crush/internal/permission"
 	"github.com/charmbracelet/crush/internal/proto"
+	"github.com/charmbracelet/crush/internal/question"
 	"github.com/charmbracelet/crush/internal/version"
 	acpsdk "github.com/coder/acp-go-sdk"
 	"github.com/google/uuid"
@@ -59,11 +61,12 @@ type Agent struct {
 // the session's permission watcher when the mode changes or the session
 // closes.
 type session struct {
-	workspace     *backend.Workspace
-	sessionID     string
-	mode          acpsdk.SessionModeId
-	modeCancel    context.CancelFunc
-	configOptions []acpsdk.SessionConfigOption
+	workspace      *backend.Workspace
+	sessionID      string
+	mode           acpsdk.SessionModeId
+	modeCancel     context.CancelFunc
+	questionCancel context.CancelFunc
+	configOptions  []acpsdk.SessionConfigOption
 }
 
 var _ acpsdk.Agent = (*Agent)(nil)
@@ -306,6 +309,7 @@ func (a *Agent) CloseSession(ctx context.Context, params acpsdk.CloseSessionRequ
 	}
 	delete(a.sessions, params.SessionId)
 	a.stopPermissionWatcherLocked(sess)
+	a.stopQuestionWatcherLocked(sess)
 	ws := sess.workspace
 	sessionID := sess.sessionID
 	lastOnWorkspace := true
@@ -351,6 +355,7 @@ func (a *Agent) CloseAll() {
 			coordinator: s.workspace.AgentCoordinator,
 		})
 		a.stopPermissionWatcherLocked(s)
+		a.stopQuestionWatcherLocked(s)
 		delete(a.sessions, id)
 	}
 	a.mu.Unlock()
@@ -542,6 +547,7 @@ func (a *Agent) NewSession(ctx context.Context, params acpsdk.NewSessionRequest)
 	sess := &session{workspace: ws, sessionID: crushSess.ID, mode: defaultMode()}
 	sess.configOptions = a.sessionConfigOptionsLocked(sess)
 	a.startPermissionWatcherLocked(sess, sess.mode)
+	a.startQuestionWatcherLocked(sess)
 	a.sessions[sessionID] = sess
 	opts := sess.configOptions
 	mode := sess.mode
@@ -597,6 +603,17 @@ func (a *Agent) Prompt(ctx context.Context, params acpsdk.PromptRequest) (acpsdk
 	// Subscribe before the run starts so no chunk is missed.
 	events := ws.App.Messages.Subscribe(runCtx)
 	readBytes := make(map[string]int)
+	// readThinking tracks how much of each assistant message's reasoning
+	// content has been relayed (US-020). Like the text part, the
+	// thinking part grows monotonically, so a byte cursor suffices.
+	readThinking := make(map[string]int)
+	// Tool call state per prompt (US-021). IDs are provider-issued and
+	// unique within a session, so a flat set per stage is enough:
+	// started once announced, inputComplete once the provider finished
+	// streaming the call's input, settled once its result was relayed.
+	startedToolCalls := make(map[string]bool)
+	inputCompleteToolCalls := make(map[string]bool)
+	settledToolCalls := make(map[string]bool)
 
 	done := make(chan error, 1)
 	go func() {
@@ -605,9 +622,105 @@ func (a *Agent) Prompt(ctx context.Context, params acpsdk.PromptRequest) (acpsdk
 	}()
 
 	stream := func(msg message.Message) {
-		if msg.SessionID != sess.sessionID || msg.Role != message.Assistant || len(msg.Parts) == 0 {
+		if msg.SessionID != sess.sessionID || len(msg.Parts) == 0 {
 			return
 		}
+
+		// Tool messages carry the outcome of a previously announced
+		// tool call; settle the card with the result (US-021).
+		if msg.Role == message.Tool {
+			for _, tr := range msg.ToolResults() {
+				if !startedToolCalls[tr.ToolCallID] || settledToolCalls[tr.ToolCallID] {
+					// Result for an unknown or already-settled call
+					// (e.g. replayed history, duplicate results): drop.
+					continue
+				}
+				status := acpsdk.ToolCallStatusCompleted
+				if tr.IsError {
+					status = acpsdk.ToolCallStatusFailed
+				}
+				opts := []acpsdk.ToolCallUpdateOpt{acpsdk.WithUpdateStatus(status)}
+				if tr.Content != "" {
+					opts = append(opts,
+						acpsdk.WithUpdateContent([]acpsdk.ToolCallContent{acpsdk.ToolContent(acpsdk.TextBlock(tr.Content))}),
+						acpsdk.WithUpdateRawOutput(parseJSONValue(tr.Content)),
+					)
+				}
+				if err := a.conn.SessionUpdate(runCtx, acpsdk.SessionNotification{
+					SessionId: params.SessionId,
+					Update:    acpsdk.UpdateToolCall(acpsdk.ToolCallId(tr.ToolCallID), opts...),
+				}); err != nil {
+					// The client went away; tear the run down.
+					cancel()
+					return
+				}
+				settledToolCalls[tr.ToolCallID] = true
+			}
+			return
+		}
+		if msg.Role != message.Assistant {
+			return
+		}
+
+		// Reasoning deltas (US-020): the thinking part grows ahead of
+		// the text part and is relayed on its own channel.
+		if thinking := msg.ReasoningContent().Thinking; len(thinking) > readThinking[msg.ID] {
+			if err := a.conn.SessionUpdate(runCtx, acpsdk.SessionNotification{
+				SessionId: params.SessionId,
+				Update:    acpsdk.UpdateAgentThoughtText(thinking[readThinking[msg.ID]:]),
+			}); err != nil {
+				// The client went away; tear the run down.
+				cancel()
+				return
+			}
+			readThinking[msg.ID] = len(thinking)
+		}
+
+		// Tool calls (US-021): announce new calls as they appear,
+		// mark input-complete once the provider stops streaming the
+		// call's input, and let the result settle the card later.
+		for _, tc := range msg.ToolCalls() {
+			if !startedToolCalls[tc.ID] {
+				status := acpsdk.ToolCallStatusPending
+				if tc.Finished {
+					status = acpsdk.ToolCallStatusInProgress
+				}
+				opts := []acpsdk.ToolCallStartOpt{
+					acpsdk.WithStartKind(toolCallKind(tc.Name)),
+					acpsdk.WithStartStatus(status),
+				}
+				if tc.Input != "" {
+					opts = append(opts, acpsdk.WithStartRawInput(parseJSONValue(tc.Input)))
+				}
+				if err := a.conn.SessionUpdate(runCtx, acpsdk.SessionNotification{
+					SessionId: params.SessionId,
+					Update:    acpsdk.StartToolCall(acpsdk.ToolCallId(tc.ID), tc.Name, opts...),
+				}); err != nil {
+					// The client went away; tear the run down.
+					cancel()
+					return
+				}
+				startedToolCalls[tc.ID] = true
+			}
+			if tc.Finished && !inputCompleteToolCalls[tc.ID] {
+				opts := []acpsdk.ToolCallUpdateOpt{
+					acpsdk.WithUpdateStatus(acpsdk.ToolCallStatusCompleted),
+				}
+				if tc.Input != "" {
+					opts = append(opts, acpsdk.WithUpdateRawInput(parseJSONValue(tc.Input)))
+				}
+				if err := a.conn.SessionUpdate(runCtx, acpsdk.SessionNotification{
+					SessionId: params.SessionId,
+					Update:    acpsdk.UpdateToolCall(acpsdk.ToolCallId(tc.ID), opts...),
+				}); err != nil {
+					// The client went away; tear the run down.
+					cancel()
+					return
+				}
+				inputCompleteToolCalls[tc.ID] = true
+			}
+		}
+
 		content := msg.Content().String()
 		read := readBytes[msg.ID]
 		if len(content) <= read {
@@ -646,6 +759,11 @@ func (a *Agent) Prompt(ctx context.Context, params acpsdk.PromptRequest) (acpsdk
 					if err != nil {
 						return acpsdk.PromptResponse{}, err
 					}
+					// The turn is over; push the session's context
+					// usage so the client panel stays current
+					// (US-024). Best-effort: failures must not
+					// change the prompt result.
+					a.pushSessionUsage(ctx, params.SessionId, sess)
 					return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, nil
 				}
 			}
@@ -749,8 +867,14 @@ func (a *Agent) activateSession(ctx context.Context, cwd string, sessionID acpsd
 	sess := &session{workspace: ws, sessionID: string(sessionID), mode: defaultMode()}
 	sess.configOptions = a.sessionConfigOptionsLocked(sess)
 	a.startPermissionWatcherLocked(sess, sess.mode)
+	a.startQuestionWatcherLocked(sess)
 	a.sessions[sessionID] = sess
 	a.mu.Unlock()
+
+	// The session panel opens on load/resume; send its current usage
+	// right away so the client has data without waiting for a prompt
+	// (US-024). Best-effort, same as the turn-end push.
+	a.pushSessionUsage(ctx, sessionID, sess)
 	return sess, nil
 }
 
@@ -916,6 +1040,208 @@ func (a *Agent) stopPermissionWatcherLocked(sess *session) {
 	}
 }
 
+// startQuestionWatcherLocked installs the per-session question handler
+// (US-022): when the model calls the question tool, question.Service
+// publishes the batch over pubsub and blocks; this watcher relays each
+// question to the ACP client as a requestPermission and feeds the
+// client's choice back through Answer, so Ask never hangs in ACP mode
+// (where no TUI consumes question events). Callers must hold a.mu.
+func (a *Agent) startQuestionWatcherLocked(sess *session) {
+	ctx, cancel := context.WithCancel(context.Background())
+	sess.questionCancel = cancel
+	events := sess.workspace.App.Questions.Subscribe(ctx)
+	go func() {
+		defer cancel()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev, ok := <-events:
+				if !ok {
+					return
+				}
+				req := ev.Payload
+				if req.SessionID != sess.sessionID {
+					continue
+				}
+				a.forwardQuestionRequest(ctx, sess, req)
+			}
+		}
+	}()
+}
+
+// stopQuestionWatcherLocked cancels the session's question watcher, if
+// any. Callers must hold a.mu.
+func (a *Agent) stopQuestionWatcherLocked(sess *session) {
+	if sess.questionCancel != nil {
+		sess.questionCancel()
+		sess.questionCancel = nil
+	}
+}
+
+// questionRequestTimeout bounds how long the agent waits for the
+// client to answer a question before cancelling it (US-022). Tests may
+// shorten it.
+var questionRequestTimeout = 5 * time.Minute
+
+// forwardQuestionRequest relays a question batch to the ACP client
+// (US-022). Each question becomes one requestPermission; answers are
+// collected and delivered to the question service in one Answer call so
+// the tool's Ask returns. A cancel, client error, or timeout cancels
+// the pending question (the tool surfaces it as a cancellation and, for
+// questions that cannot be expressed, the model can switch tactics).
+// With no client attached (in-process use) the batch is auto-answered,
+// matching the permission auto-grant behavior.
+func (a *Agent) forwardQuestionRequest(ctx context.Context, sess *session, req question.Request) {
+	conn := a.connection()
+	if conn == nil {
+		sess.workspace.App.Questions.Answer(autoAnswers(req.Questions))
+		return
+	}
+
+	answers := make([]question.Answer, 0, len(req.Questions))
+	for _, q := range req.Questions {
+		if !canExpressQuestion(q) {
+			// US-023: multi_choice / free_text cannot be carried by
+			// requestPermission options. Cancel so the tool returns a
+			// StopTurn error and the model can switch tactics; see
+			// US-023 for richer degradation options.
+			sess.workspace.App.Questions.Cancel()
+			return
+		}
+		rctx, cancel := context.WithTimeout(ctx, questionRequestTimeout)
+		resp, err := conn.RequestPermission(rctx, questionToPermission(req, q))
+		cancel()
+		if err != nil {
+			sess.workspace.App.Questions.Cancel()
+			return
+		}
+		if resp.Outcome.Cancelled != nil {
+			sess.workspace.App.Questions.Cancel()
+			return
+		}
+		if resp.Outcome.Selected == nil {
+			sess.workspace.App.Questions.Cancel()
+			return
+		}
+		answer, ok := permissionOutcomeToAnswer(q, resp.Outcome)
+		if !ok {
+			sess.workspace.App.Questions.Cancel()
+			return
+		}
+		answers = append(answers, answer)
+	}
+	sess.workspace.App.Questions.Answer(answers)
+}
+
+// canExpressQuestion reports whether a question type can be carried by
+// a requestPermission (US-022 / US-023): yes_no and single_choice map
+// one-to-one onto permission options; multi_choice and free_text cannot.
+func canExpressQuestion(q question.Question) bool {
+	switch q.Type {
+	case question.TypeYesNo, question.TypeSingleChoice:
+		return true
+	default:
+		return false
+	}
+}
+
+// autoAnswers produces default answers for a question batch when no
+// client is attached (in-process use): yes_no answers yes, single_choice
+// picks the first choice. multi_choice and free_text fall back to an
+// empty answer so the tool still formats a response.
+func autoAnswers(questions []question.Question) []question.Answer {
+	answers := make([]question.Answer, 0, len(questions))
+	for _, q := range questions {
+		ans := question.Answer{QuestionID: q.ID}
+		switch q.Type {
+		case question.TypeYesNo:
+			yes := true
+			ans.Yes = &yes
+		case question.TypeSingleChoice:
+			if len(q.Choices) > 0 {
+				ans.SelectedIDs = []string{q.Choices[0].ID}
+			}
+		}
+		answers = append(answers, ans)
+	}
+	return answers
+}
+
+// questionToPermission maps one question onto a requestPermission the
+// client can present as a question dialog: the question text becomes
+// the tool call title, choices become options (yes_no becomes Yes/No,
+// single_choice becomes one option per choice), and the full question
+// structure rides along in rawInput for clients that want to render it.
+func questionToPermission(req question.Request, q question.Question) acpsdk.RequestPermissionRequest {
+	title := q.Text
+	if len(req.Questions) > 1 && req.ConfirmTitle != "" {
+		title = fmt.Sprintf("%s / %s", req.ConfirmTitle, q.Text)
+	}
+
+	options := make([]acpsdk.PermissionOption, 0, 2)
+	switch q.Type {
+	case question.TypeYesNo:
+		options = append(options,
+			acpsdk.PermissionOption{OptionId: "yes", Kind: acpsdk.PermissionOptionKindAllowOnce, Name: "Yes"},
+			acpsdk.PermissionOption{OptionId: "no", Kind: acpsdk.PermissionOptionKindRejectOnce, Name: "No"},
+		)
+	case question.TypeSingleChoice:
+		for _, c := range q.Choices {
+			options = append(options, acpsdk.PermissionOption{
+				OptionId: acpsdk.PermissionOptionId(c.ID),
+				Kind:     acpsdk.PermissionOptionKindAllowOnce,
+				Name:     c.Label,
+			})
+		}
+	}
+
+	rawInput := map[string]any{
+		"question_id":   q.ID,
+		"question_type": string(q.Type),
+		"question":      q.Text,
+		"description":   q.Description,
+		"label":         q.Label,
+	}
+	if len(req.Questions) > 1 {
+		rawInput["confirm_title"] = req.ConfirmTitle
+		rawInput["confirm_description"] = req.ConfirmDescription
+	}
+
+	return acpsdk.RequestPermissionRequest{
+		SessionId: acpsdk.SessionId(req.SessionID),
+		ToolCall: acpsdk.ToolCallUpdate{
+			ToolCallId: acpsdk.ToolCallId(req.ToolCallID),
+			Title:      acpsdk.Ptr(title),
+			Kind:       acpsdk.Ptr(acpsdk.ToolKindOther),
+			RawInput:   rawInput,
+		},
+		Options: options,
+	}
+}
+
+// permissionOutcomeToAnswer maps the client's permission choice back to
+// a question answer: yes_no reads the yes/no option, single_choice
+// reports the chosen option ID. The bool reports whether the outcome
+// produced a valid answer.
+func permissionOutcomeToAnswer(q question.Question, out acpsdk.RequestPermissionOutcome) (question.Answer, bool) {
+	if out.Selected == nil {
+		return question.Answer{}, false
+	}
+	optionID := string(out.Selected.OptionId)
+	ans := question.Answer{QuestionID: q.ID}
+	switch q.Type {
+	case question.TypeYesNo:
+		yes := optionID == "yes"
+		ans.Yes = &yes
+	case question.TypeSingleChoice:
+		ans.SelectedIDs = []string{optionID}
+	default:
+		return question.Answer{}, false
+	}
+	return ans, true
+}
+
 // permissionRequestTimeout bounds how long the agent waits for the
 // client to answer a permission request before denying it. Tests may
 // shorten it.
@@ -993,6 +1319,37 @@ func permissionToolKind(action string) *acpsdk.ToolKind {
 		k = acpsdk.ToolKindOther
 	}
 	return &k
+}
+
+// toolCallKind maps a crush tool name to the ACP tool kind so the
+// client can pick an icon and UI treatment for the tool call card
+// (US-021).
+func toolCallKind(name string) acpsdk.ToolKind {
+	switch name {
+	case "view", "ls", "outline", "file_finder":
+		return acpsdk.ToolKindRead
+	case "edit", "write", "multiedit", "apply_patch":
+		return acpsdk.ToolKindEdit
+	case "bash", "terminal":
+		return acpsdk.ToolKindExecute
+	case "grep", "glob", "search", "sourcegraph", "web_search":
+		return acpsdk.ToolKindSearch
+	case "fetch", "web_fetch", "download", "agentic_fetch":
+		return acpsdk.ToolKindFetch
+	default:
+		return acpsdk.ToolKindOther
+	}
+}
+
+// parseJSONValue parses a tool input or output string as JSON so the
+// client's tool call UI can show structured rawInput/rawOutput, falling
+// back to the raw string when it is not valid JSON.
+func parseJSONValue(s string) any {
+	var v any
+	if err := json.Unmarshal([]byte(s), &v); err == nil {
+		return v
+	}
+	return s
 }
 
 // fileClient routes file reads and writes to the ACP client when it
@@ -1356,4 +1713,47 @@ func (a *Agent) notifyConfigOptions(ctx context.Context, sid acpsdk.SessionId, o
 			ConfigOptionUpdate: &acpsdk.SessionConfigOptionUpdate{ConfigOptions: opts},
 		},
 	})
+}
+
+// notifyUsage pushes a usage_update notification carrying the session's
+// context-window usage and cumulative cost to the client (US-024). The
+// update is best-effort: an absent connection or a client that has
+// gone away must never affect the caller.
+func (a *Agent) notifyUsage(ctx context.Context, sid acpsdk.SessionId, used, size int, cost *acpsdk.Cost) {
+	if a.conn == nil {
+		return
+	}
+	_ = a.conn.SessionUpdate(ctx, acpsdk.SessionNotification{
+		SessionId: sid,
+		Update: acpsdk.SessionUpdate{
+			UsageUpdate: &acpsdk.SessionUsageUpdate{
+				Size: size,
+				Used: used,
+				Cost: cost,
+			},
+		},
+	})
+}
+
+// pushSessionUsage reads the session's current token usage and the
+// workspace's large-model context window and notifies the client
+// (US-024). Best-effort: a missing workspace config, an unknown
+// session, or a transport error are all ignored so the caller's result
+// is unaffected.
+func (a *Agent) pushSessionUsage(ctx context.Context, sid acpsdk.SessionId, sess *session) {
+	if sess == nil || sess.workspace == nil || sess.workspace.Cfg == nil {
+		return
+	}
+	largeModel := sess.workspace.Cfg.Config().LargeModel()
+	if largeModel == nil {
+		return
+	}
+	crushSess, err := sess.workspace.App.Sessions.Get(ctx, sess.sessionID)
+	if err != nil {
+		return
+	}
+	a.notifyUsage(ctx, sid,
+		int(crushSess.CompletionTokens+crushSess.PromptTokens),
+		int(largeModel.ContextWindow),
+		&acpsdk.Cost{Amount: crushSess.Cost, Currency: "USD"})
 }
