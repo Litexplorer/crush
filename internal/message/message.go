@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,6 +27,13 @@ type CreateMessageParams struct {
 	Model            string
 	Provider         string
 	IsSummaryMessage bool
+}
+
+// SearchResult is a message matched by keyword search plus the title of
+// the session it belongs to.
+type SearchResult struct {
+	Message      Message
+	SessionTitle string
 }
 
 // Service is the public interface to the message store.
@@ -51,6 +59,7 @@ type Service interface {
 	List(ctx context.Context, sessionID string) ([]Message, error)
 	ListUserMessages(ctx context.Context, sessionID string) ([]Message, error)
 	ListAllUserMessages(ctx context.Context) ([]Message, error)
+	SearchMessages(ctx context.Context, query string, limit int) ([]SearchResult, error)
 	GetLastAssistantMessage(ctx context.Context, sessionID string) (Message, error)
 	Delete(ctx context.Context, id string) error
 	DeleteSessionMessages(ctx context.Context, sessionID string) error
@@ -497,6 +506,34 @@ func (s *service) ListAllUserMessages(ctx context.Context) ([]Message, error) {
 		}
 	}
 	return messages, nil
+}
+
+func (s *service) SearchMessages(ctx context.Context, query string, limit int) ([]SearchResult, error) {
+	if strings.TrimSpace(query) == "" {
+		return nil, nil
+	}
+	dbResults, err := s.q.SearchMessages(ctx, db.SearchMessagesParams{
+		Column1: sql.NullString{String: query, Valid: true},
+		Limit:   int64(limit),
+	})
+	if err != nil {
+		return nil, err
+	}
+	results := make([]SearchResult, 0, len(dbResults))
+	for _, row := range dbResults {
+		msg, err := s.fromDBItem(db.Message{
+			ID:        row.ID,
+			SessionID: row.SessionID,
+			Role:      row.Role,
+			Parts:     row.Parts,
+			CreatedAt: row.CreatedAt,
+		})
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, SearchResult{Message: msg, SessionTitle: row.SessionTitle})
+	}
+	return results, nil
 }
 
 func (s *service) GetLastAssistantMessage(ctx context.Context, sessionID string) (Message, error) {

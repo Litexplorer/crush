@@ -134,6 +134,7 @@ type Workspace interface {
 	ListMessages(ctx context.Context, sessionID string) ([]message.Message, error)
 	ListUserMessages(ctx context.Context, sessionID string) ([]message.Message, error)
 	ListAllUserMessages(ctx context.Context) ([]message.Message, error)
+	SearchMessages(ctx context.Context, query string, limit int) ([]message.SearchResult, error)
 
 	// Agent
 	AgentRun(ctx context.Context, sessionID, prompt string, attachments ...message.Attachment) error

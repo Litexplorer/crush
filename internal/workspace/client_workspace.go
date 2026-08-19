@@ -221,6 +221,12 @@ func (w *ClientWorkspace) ListAllUserMessages(ctx context.Context) ([]message.Me
 	return protoToMessages(msgs), nil
 }
 
+// SearchMessages is not supported in client/server mode yet; it exists to
+// satisfy the Workspace interface.
+func (w *ClientWorkspace) SearchMessages(ctx context.Context, query string, limit int) ([]message.SearchResult, error) {
+	return nil, errors.New("SearchMessages is not supported in client/server mode")
+}
+
 // -- Agent --
 
 func (w *ClientWorkspace) AgentRun(ctx context.Context, sessionID, prompt string, attachments ...message.Attachment) error {

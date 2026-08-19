@@ -54,6 +54,14 @@ FROM messages
 WHERE role = 'user'
 ORDER BY created_at DESC;
 
+-- name: SearchMessages :many
+SELECT m.id, m.session_id, m.role, m.parts, m.created_at, s.title AS session_title
+FROM messages m
+JOIN sessions s ON s.id = m.session_id
+WHERE m.parts LIKE '%' || ? || '%'
+ORDER BY m.created_at DESC
+LIMIT ?;
+
 -- name: GetLastAssistantMessageBySession :one
 SELECT *
 FROM messages

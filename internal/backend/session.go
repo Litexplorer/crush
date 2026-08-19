@@ -130,3 +130,14 @@ func (b *Backend) ListAllUserMessages(ctx context.Context, workspaceID string) (
 
 	return ws.Messages.ListAllUserMessages(ctx)
 }
+
+// SearchMessages returns messages matching query across sessions along
+// with their session titles.
+func (b *Backend) SearchMessages(ctx context.Context, workspaceID, query string, limit int) ([]message.SearchResult, error) {
+	ws, err := b.GetWorkspace(workspaceID)
+	if err != nil {
+		return nil, err
+	}
+
+	return ws.Messages.SearchMessages(ctx, query, limit)
+}

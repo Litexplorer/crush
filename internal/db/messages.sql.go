@@ -256,6 +256,59 @@ func (q *Queries) ListUserMessagesBySession(ctx context.Context, sessionID strin
 	return items, nil
 }
 
+const searchMessages = `-- name: SearchMessages :many
+SELECT m.id, m.session_id, m.role, m.parts, m.created_at, s.title AS session_title
+FROM messages m
+JOIN sessions s ON s.id = m.session_id
+WHERE m.parts LIKE '%' || ? || '%'
+ORDER BY m.created_at DESC
+LIMIT ?
+`
+
+type SearchMessagesParams struct {
+	Column1 sql.NullString `json:"column_1"`
+	Limit   int64          `json:"limit"`
+}
+
+type SearchMessagesRow struct {
+	ID           string `json:"id"`
+	SessionID    string `json:"session_id"`
+	Role         string `json:"role"`
+	Parts        string `json:"parts"`
+	CreatedAt    int64  `json:"created_at"`
+	SessionTitle string `json:"session_title"`
+}
+
+func (q *Queries) SearchMessages(ctx context.Context, arg SearchMessagesParams) ([]SearchMessagesRow, error) {
+	rows, err := q.query(ctx, q.searchMessagesStmt, searchMessages, arg.Column1, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SearchMessagesRow{}
+	for rows.Next() {
+		var i SearchMessagesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SessionID,
+			&i.Role,
+			&i.Parts,
+			&i.CreatedAt,
+			&i.SessionTitle,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const updateMessage = `-- name: UpdateMessage :exec
 UPDATE messages
 SET

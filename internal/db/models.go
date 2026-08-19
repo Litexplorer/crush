@@ -8,6 +8,12 @@ import (
 	"database/sql"
 )
 
+type AcpSession struct {
+	SessionID string `json:"session_id"`
+	Cwd       string `json:"cwd"`
+	UpdatedAt int64  `json:"updated_at"`
+}
+
 type File struct {
 	ID        string `json:"id"`
 	SessionID string `json:"session_id"`
