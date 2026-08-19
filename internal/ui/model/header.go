@@ -30,6 +30,10 @@ type header struct {
 	com     *common.Common
 	width   int
 	compact bool
+
+	// searchBtnWidth is the display width of the search button, updated
+	// on every draw so the model can map header clicks to the button.
+	searchBtnWidth int
 }
 
 // newHeader creates a new header model.
@@ -82,19 +86,34 @@ func (h *header) drawHeader(
 	h.width = width
 	h.compact = compact
 
+	searchBtn := t.Header.Keystroke.Render("⌕") + t.Header.KeystrokeTip.Render(" search")
+	searchBtnW := lipgloss.Width(searchBtn)
+
 	if !compact || session == nil {
-		uv.NewStyledString(h.logo).Draw(scr, area)
+		if session == nil {
+			uv.NewStyledString(h.logo).Draw(scr, area)
+			h.searchBtnWidth = 0
+			return
+		}
+		logoW := lipgloss.Width(h.logo)
+		spacer := strings.Repeat(" ", max(0, width-leftPadding-rightPadding-logoW-searchBtnW))
+		view := uv.NewStyledString(
+			t.Header.Wrapper.Padding(0, rightPadding, 0, leftPadding).Render(h.logo + spacer + searchBtn),
+		)
+		view.Draw(scr, area)
+		h.searchBtnWidth = searchBtnW
 		return
 	}
 
 	if session.ID == "" {
+		h.searchBtnWidth = 0
 		return
 	}
 
 	var b strings.Builder
 	b.WriteString(h.compactLogo)
 
-	availDetailWidth := width - leftPadding - rightPadding - lipgloss.Width(b.String()) - minHeaderDiags - diagToDetailsSpacing
+	availDetailWidth := width - leftPadding - rightPadding - lipgloss.Width(b.String()) - minHeaderDiags - diagToDetailsSpacing - searchBtnW
 	details := renderHeaderDetails(
 		h.com,
 		session,
@@ -107,6 +126,7 @@ func (h *header) drawHeader(
 	remainingWidth := width -
 		lipgloss.Width(b.String()) -
 		lipgloss.Width(details) -
+		searchBtnW -
 		leftPadding -
 		rightPadding -
 		diagToDetailsSpacing
@@ -119,11 +139,14 @@ func (h *header) drawHeader(
 	}
 
 	b.WriteString(details)
+	b.WriteString(" ")
+	b.WriteString(searchBtn)
 
 	view := uv.NewStyledString(
 		t.Header.Wrapper.Padding(0, rightPadding, 0, leftPadding).Render(b.String()),
 	)
 	view.Draw(scr, area)
+	h.searchBtnWidth = searchBtnW
 }
 
 // renderHeaderDetails renders the details section of the header.

@@ -36,6 +36,13 @@ type ActionSelectSession struct {
 	Session session.Session
 }
 
+// ActionSelectSearchResult is a message indicating a search result has
+// been selected, carrying the matched session and message IDs.
+type ActionSelectSearchResult struct {
+	SessionID string
+	MessageID string
+}
+
 // ActionSelectModel is a message indicating a model has been selected.
 type ActionSelectModel struct {
 	Provider       catwalk.Provider

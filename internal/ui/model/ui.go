@@ -1655,6 +1655,10 @@ func (m *UI) handleClickFocus(msg tea.MouseClickMsg) (cmd tea.Cmd) {
 	switch {
 	case m.state != uiChat:
 		return nil
+	case m.header != nil && m.header.searchBtnWidth > 0 && msg.Button == uv.MouseLeft &&
+		image.Pt(msg.X, msg.Y).In(m.layout.header) &&
+		msg.X >= m.layout.header.Max.X-m.header.searchBtnWidth:
+		return m.openSearchDialog()
 	case m.focus != uiFocusSidebar && image.Pt(msg.X, msg.Y).In(m.layout.sidebar) && m.sidebarScrollable:
 		m.focus = uiFocusSidebar
 		m.textarea.Blur()
@@ -1886,6 +1890,11 @@ func (m *UI) handleDialogMsg(msg tea.Msg) tea.Cmd {
 	case dialog.ActionSelectSession:
 		m.dialog.CloseDialog(dialog.SessionsID)
 		cmds = append(cmds, m.loadSession(msg.Session.ID))
+
+	// Search dialog messages.
+	case dialog.ActionSelectSearchResult:
+		m.dialog.CloseDialog(dialog.SearchID)
+		cmds = append(cmds, m.loadSession(msg.SessionID))
 
 	// Open dialog message.
 	case dialog.ActionOpenDialog:
@@ -2408,6 +2417,11 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 			return true
 		case key.Matches(msg, m.keyMap.Sessions):
 			if cmd := m.openSessionsDialog(); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			return true
+		case key.Matches(msg, m.keyMap.Search):
+			if cmd := m.openSearchDialog(); cmd != nil {
 				cmds = append(cmds, cmd)
 			}
 			return true
@@ -3169,6 +3183,7 @@ func (m *UI) ShortHelp() []key.Binding {
 			tab,
 			commands,
 			k.Models,
+			k.Search,
 		)
 
 		if m.hasSession() {
@@ -3271,6 +3286,7 @@ func (m *UI) FullHelp() [][]key.Binding {
 			tab,
 			commands,
 			k.Models,
+			k.Search,
 			k.Sessions,
 			k.ToggleYolo,
 		)
@@ -4375,6 +4391,10 @@ func (m *UI) openDialog(id string) tea.Cmd {
 		if cmd := m.openSessionsDialog(); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
+	case dialog.SearchID:
+		if cmd := m.openSearchDialog(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	case dialog.ModelsID:
 		if cmd := m.openModelsDialog(); cmd != nil {
 			cmds = append(cmds, cmd)
@@ -4416,6 +4436,18 @@ func (m *UI) openQuitDialog() tea.Cmd {
 
 	quitDialog := dialog.NewQuit(m.com)
 	m.dialog.OpenDialog(quitDialog)
+	return nil
+}
+
+// openSearchDialog opens the message search dialog.
+func (m *UI) openSearchDialog() tea.Cmd {
+	if m.dialog.ContainsDialog(dialog.SearchID) {
+		m.dialog.BringToFront(dialog.SearchID)
+		return nil
+	}
+
+	searchDialog := dialog.NewSearch(m.com)
+	m.dialog.OpenDialog(searchDialog)
 	return nil
 }
 
