@@ -683,8 +683,14 @@ func (l *List) RemoveItem(idx int) {
 	// Adjust offset if needed
 	if l.offsetIdx > idx {
 		l.offsetIdx--
-	} else if l.offsetIdx == idx && l.offsetIdx >= len(l.items) {
-		l.offsetIdx = max(0, len(l.items)-1)
+	} else if l.offsetIdx == idx {
+		// The first visible item was removed. The next item slides into
+		// the top of the viewport and must start at line 0 — the stale
+		// offsetLine belonged to the removed item, so without resetting
+		// it the viewport content appears shifted up by that many lines.
+		if l.offsetIdx >= len(l.items) {
+			l.offsetIdx = max(0, len(l.items)-1)
+		}
 		l.offsetLine = 0
 	}
 	l.totalHeightValid = false
