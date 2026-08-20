@@ -55,10 +55,16 @@ func (h *hookedTool) SetProviderOptions(opts fantasy.ProviderOptions) {
 
 func (h *hookedTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	sessionID := tools.GetSessionFromContext(ctx)
-	result, err := h.runner.Run(ctx, hooks.EventPreToolUse, sessionID, call.Name, call.Input)
-	if err != nil {
-		slog.Warn("Hook execution error, proceeding with tool call",
-			"tool", call.Name, "error", err)
+
+	// PreToolUse is optional (e.g. only PostToolUse hooks configured).
+	var result hooks.AggregateResult
+	if h.runner != nil {
+		var err error
+		result, err = h.runner.Run(ctx, hooks.EventPreToolUse, sessionID, call.Name, call.Input)
+		if err != nil {
+			slog.Warn("Hook execution error, proceeding with tool call",
+				"tool", call.Name, "error", err)
+		}
 	}
 
 	if result.Decision == hooks.DecisionDeny || result.Halt {
@@ -91,13 +97,26 @@ func (h *hookedTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 	}
 
 	if h.postRunner != nil {
-		postResult, postErr := h.postRunner.Run(ctx, hooks.EventPostToolUse, sessionID, call.Name, call.Input)
+		postResult, postErr := h.postRunner.RunWithToolResponse(ctx, hooks.EventPostToolUse, sessionID, call.Name, call.Input, buildToolResponseJSON(resp, err))
 		if postErr != nil {
 			slog.Warn("PostToolUse hook execution error",
 				"tool", call.Name, "error", postErr)
 		} else if postResult.HookCount > 0 {
+			// PostToolUse hooks cannot block the tool (it already ran),
+			// so only halt and context are honored. Deny, updated_input
+			// and the block exit code are ignored at this stage.
+			if postResult.Halt {
+				resp.StopTurn = true
+			}
+			if postResult.Context != "" {
+				if resp.Content != "" {
+					resp.Content += "\n"
+				}
+				resp.Content += postResult.Context
+			}
+			resp.Metadata = mergeHookMetadata(resp.Metadata, postResult)
 			slog.Debug("PostToolUse hooks completed",
-				"tool", call.Name, "hooks", postResult.HookCount)
+				"tool", call.Name, "hooks", postResult.HookCount, "halt", postResult.Halt)
 		}
 	}
 
@@ -110,6 +129,38 @@ func (h *hookedTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 
 	resp.Metadata = mergeHookMetadata(resp.Metadata, result)
 	return resp, nil
+}
+
+// maxToolResponseContent caps how much of a tool's output is passed to
+// PostToolUse hooks. Oversized output is truncated with a marker so hooks
+// stay fast and payloads stay small.
+const maxToolResponseContent = 200 * 1024
+
+// buildToolResponseJSON renders a tool's result as the JSON object passed
+// to PostToolUse hooks in the payload's tool_response field.
+func buildToolResponseJSON(resp fantasy.ToolResponse, err error) string {
+	content := resp.Content
+	truncated := false
+	if len(content) > maxToolResponseContent {
+		content = content[:maxToolResponseContent]
+		truncated = true
+	}
+
+	var errMsg string
+	if err != nil {
+		errMsg = err.Error()
+	}
+
+	data, marshalErr := json.Marshal(map[string]any{
+		"content":   content,
+		"error":     errMsg,
+		"metadata":  resp.Metadata,
+		"truncated": truncated,
+	})
+	if marshalErr != nil {
+		return ""
+	}
+	return string(data)
 }
 
 // buildHookMetadata creates a HookMetadata from an AggregateResult.

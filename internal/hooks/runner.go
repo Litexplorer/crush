@@ -88,6 +88,17 @@ func (r *Runner) Hooks() []config.HookConfig {
 // Run executes all matching hooks for the given event and tool, returning
 // an aggregated result.
 func (r *Runner) Run(ctx context.Context, eventName, sessionID, toolName, toolInputJSON string) (AggregateResult, error) {
+	return r.run(ctx, eventName, sessionID, toolName, toolInputJSON, "")
+}
+
+// RunWithToolResponse is like Run but also passes the tool's output to
+// the hooks in the payload's tool_response field. PostToolUse hooks use
+// this to inspect what the tool produced.
+func (r *Runner) RunWithToolResponse(ctx context.Context, eventName, sessionID, toolName, toolInputJSON, toolResponseJSON string) (AggregateResult, error) {
+	return r.run(ctx, eventName, sessionID, toolName, toolInputJSON, toolResponseJSON)
+}
+
+func (r *Runner) run(ctx context.Context, eventName, sessionID, toolName, toolInputJSON, toolResponseJSON string) (AggregateResult, error) {
 	matching := r.matchingHooks(toolName)
 	if len(matching) == 0 {
 		return AggregateResult{Decision: DecisionNone}, nil
@@ -105,7 +116,7 @@ func (r *Runner) Run(ctx context.Context, eventName, sessionID, toolName, toolIn
 	}
 
 	envVars := BuildEnv(eventName, toolName, sessionID, r.cwd, r.projectDir, toolInputJSON)
-	payload := BuildPayload(eventName, sessionID, r.cwd, toolName, toolInputJSON)
+	payload := BuildPayloadWithResponse(eventName, sessionID, r.cwd, toolName, toolInputJSON, toolResponseJSON)
 
 	results := make([]HookResult, len(deduped))
 	var wg sync.WaitGroup

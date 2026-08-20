@@ -19,17 +19,30 @@ const SupportedOutputVersion = 1
 // Payload is the JSON structure piped to hook commands via stdin.
 // ToolInput is emitted as a parsed JSON object for compatibility with
 // Claude Code hooks (which expect tool_input to be an object, not a
-// string).
+// string). ToolResponse is only populated for PostToolUse events and
+// carries the tool's output for the hook to inspect.
 type Payload struct {
-	Event     string          `json:"event"`
-	SessionID string          `json:"session_id"`
-	CWD       string          `json:"cwd"`
-	ToolName  string          `json:"tool_name"`
-	ToolInput json.RawMessage `json:"tool_input"`
+	Event        string          `json:"event"`
+	SessionID    string          `json:"session_id"`
+	CWD          string          `json:"cwd"`
+	ToolName     string          `json:"tool_name"`
+	ToolInput    json.RawMessage `json:"tool_input"`
+	ToolResponse json.RawMessage `json:"tool_response,omitempty"`
 }
 
 // BuildPayload constructs the JSON stdin payload for a hook command.
 func BuildPayload(eventName, sessionID, cwd, toolName, toolInputJSON string) []byte {
+	return buildPayload(eventName, sessionID, cwd, toolName, toolInputJSON, "")
+}
+
+// BuildPayloadWithResponse constructs the JSON stdin payload for a hook
+// command, including the tool's output in tool_response. Used by
+// PostToolUse hooks so they can inspect what the tool produced.
+func BuildPayloadWithResponse(eventName, sessionID, cwd, toolName, toolInputJSON, toolResponseJSON string) []byte {
+	return buildPayload(eventName, sessionID, cwd, toolName, toolInputJSON, toolResponseJSON)
+}
+
+func buildPayload(eventName, sessionID, cwd, toolName, toolInputJSON, toolResponseJSON string) []byte {
 	toolInput := json.RawMessage(toolInputJSON)
 	if !json.Valid(toolInput) {
 		toolInput = json.RawMessage("{}")
@@ -40,6 +53,9 @@ func BuildPayload(eventName, sessionID, cwd, toolName, toolInputJSON string) []b
 		CWD:       cwd,
 		ToolName:  toolName,
 		ToolInput: toolInput,
+	}
+	if toolResponseJSON != "" && json.Valid(json.RawMessage(toolResponseJSON)) {
+		p.ToolResponse = json.RawMessage(toolResponseJSON)
 	}
 	data, err := json.Marshal(p)
 	if err != nil {
