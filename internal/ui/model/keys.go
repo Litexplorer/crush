@@ -47,6 +47,7 @@ type KeyMap struct {
 		Copy           key.Binding
 		ClearHighlight key.Binding
 		Expand         key.Binding
+		DeleteTurn     key.Binding
 		ScrollLeft     key.Binding
 		ScrollRight    key.Binding
 		FocusSidebar   key.Binding
@@ -262,6 +263,10 @@ func DefaultKeyMap() KeyMap {
 	km.Chat.Expand = key.NewBinding(
 		key.WithKeys("space"),
 		key.WithHelp("space", "expand/collapse"),
+	)
+	km.Chat.DeleteTurn = key.NewBinding(
+		key.WithKeys("ctrl+x"),
+		key.WithHelp("ctrl+x", "delete turn"),
 	)
 	km.Chat.ScrollLeft = key.NewBinding(
 		key.WithKeys("shift+left", "H"),

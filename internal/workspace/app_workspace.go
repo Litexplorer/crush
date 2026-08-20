@@ -105,6 +105,15 @@ func (w *AppWorkspace) SearchMessages(ctx context.Context, query string, limit i
 	return w.app.Messages.SearchMessages(ctx, query, limit)
 }
 
+func (w *AppWorkspace) DeleteTurn(ctx context.Context, sessionID string, anchorMessageID string) ([]message.Message, error) {
+	// Drain any debounced updates so the deletion observes the latest
+	// in-memory state before resolving the turn boundary.
+	if err := w.app.Messages.FlushAll(ctx); err != nil {
+		return nil, err
+	}
+	return w.app.Messages.DeleteTurn(ctx, sessionID, anchorMessageID)
+}
+
 // -- Agent --
 
 func (w *AppWorkspace) AgentRun(ctx context.Context, sessionID, prompt string, attachments ...message.Attachment) error {
