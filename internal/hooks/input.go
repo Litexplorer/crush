@@ -59,9 +59,11 @@ func buildPayload(eventName, sessionID, cwd, toolName, toolInputJSON, toolRespon
 	}
 	data, err := json.Marshal(p)
 	if err != nil {
-		return []byte("{}")
+		return []byte("{}\n")
 	}
-	return data
+	// Ensure the payload ends with a newline so POSIX `read` in hook
+	// scripts exits 0 instead of hitting EOF and failing under `set -e`.
+	return append(data, '\n')
 }
 
 // BuildEnv constructs the environment variable slice for a hook command.
