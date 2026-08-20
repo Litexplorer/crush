@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/crush/internal/agent/tools"
 	"github.com/charmbracelet/crush/internal/hooks"
 	"github.com/charmbracelet/crush/internal/permission"
+	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
 
@@ -186,17 +187,43 @@ func hookMetadataJSON(result hooks.AggregateResult) string {
 }
 
 // mergeHookMetadata injects hook metadata into existing tool metadata.
+// Successive calls accumulate: hooks from later results are appended to
+// the existing hook list rather than replacing it, so PreToolUse and
+// PostToolUse indicators both survive on the same tool call.
 func mergeHookMetadata(existing string, result hooks.AggregateResult) string {
 	if result.HookCount == 0 {
 		return existing
 	}
 	meta := buildHookMetadata(result)
+	if existing == "" {
+		existing = "{}"
+	}
+
+	// A hook object already exists — append our hooks to it instead of
+	// replacing the whole key.
+	if gjson.Get(existing, "hook").Exists() {
+		hookCount := gjson.Get(existing, "hook.hook_count").Int() + int64(meta.HookCount)
+		out := existing
+		for _, hi := range meta.Hooks {
+			hiJSON, err := json.Marshal(hi)
+			if err != nil {
+				continue
+			}
+			out, err = sjson.SetRaw(out, "hook.hooks.-1", string(hiJSON))
+			if err != nil {
+				return existing
+			}
+		}
+		out, err := sjson.Set(out, "hook.hook_count", hookCount)
+		if err != nil {
+			return existing
+		}
+		return out
+	}
+
 	data, err := json.Marshal(meta)
 	if err != nil {
 		return existing
-	}
-	if existing == "" {
-		existing = "{}"
 	}
 	merged, err := sjson.SetRaw(existing, "hook", string(data))
 	if err != nil {
