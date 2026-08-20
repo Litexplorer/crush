@@ -591,6 +591,20 @@ func (m *Chat) ScrollToIndex(index int) tea.Cmd {
 	return m.showScrollbar()
 }
 
+// ScrollToMessage scrolls the chat view to the message with the given ID,
+// selecting it when the item is selectable.
+func (m *Chat) ScrollToMessage(id string) tea.Cmd {
+	idx, ok := m.idInxMap[id]
+	if !ok {
+		return nil
+	}
+	if m.isSelectable(idx) {
+		m.list.SetSelected(idx)
+	}
+	m.list.ScrollToIndex(idx)
+	return m.showScrollbar()
+}
+
 // showScrollbar makes the scrollbar visible and returns a command to hide it after timeout.
 func (m *Chat) showScrollbar() tea.Cmd {
 	// Only start timer for "default" mode

@@ -228,6 +228,12 @@ type UI struct {
 	// stable, eliminating races between session load and shell output.
 	pendingBangCommand string
 
+	// pendingScrollToMessageID holds the message ID a message-search
+	// result jump should scroll to once the target session has loaded.
+	// Set by the search dialog action, consumed and cleared by the
+	// loadSessionMsg handler after the chat list is built.
+	pendingScrollToMessageID string
+
 	// bangCancel cancels a running bang-mode shell command. Nil when no
 	// bang command is in progress. Set by runShellCommand, cleared by
 	// shellResultMsg. Checked by isAgentBusy and cancelAgent so that
@@ -789,6 +795,15 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if cmd := m.setSessionMessages(msgs); cmd != nil {
 			cmds = append(cmds, cmd)
+		}
+		// A search-result jump scrolls to the hit message once the chat
+		// list is stable. Must run after setSessionMessages, which ends
+		// by selecting the last message.
+		if m.pendingScrollToMessageID != "" {
+			if cmd := m.chat.ScrollToMessage(m.pendingScrollToMessageID); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			m.pendingScrollToMessageID = ""
 		}
 		if cmd := m.restoreModelFromSession(msgs); cmd != nil {
 			cmds = append(cmds, cmd)
@@ -1894,6 +1909,7 @@ func (m *UI) handleDialogMsg(msg tea.Msg) tea.Cmd {
 	// Search dialog messages.
 	case dialog.ActionSelectSearchResult:
 		m.dialog.CloseDialog(dialog.SearchID)
+		m.pendingScrollToMessageID = msg.MessageID
 		cmds = append(cmds, m.loadSession(msg.SessionID))
 
 	// Open dialog message.
