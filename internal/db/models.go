@@ -37,6 +37,10 @@ type Message struct {
 	IsSummaryMessage int64          `json:"is_summary_message"`
 }
 
+type MessagesFt struct {
+	Parts string `json:"parts"`
+}
+
 type ReadFile struct {
 	SessionID string `json:"session_id"`
 	Path      string `json:"path"`

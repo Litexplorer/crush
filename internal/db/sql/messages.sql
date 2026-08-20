@@ -58,7 +58,7 @@ ORDER BY created_at DESC;
 SELECT m.id, m.session_id, m.role, m.parts, m.created_at, s.title AS session_title
 FROM messages m
 JOIN sessions s ON s.id = m.session_id
-WHERE m.parts LIKE '%' || ? || '%'
+WHERE m.rowid IN (SELECT fts.rowid FROM messages_fts fts WHERE fts.parts MATCH ?)
 ORDER BY m.created_at DESC
 LIMIT ?;
 

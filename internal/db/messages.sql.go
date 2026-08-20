@@ -260,14 +260,14 @@ const searchMessages = `-- name: SearchMessages :many
 SELECT m.id, m.session_id, m.role, m.parts, m.created_at, s.title AS session_title
 FROM messages m
 JOIN sessions s ON s.id = m.session_id
-WHERE m.parts LIKE '%' || ? || '%'
+WHERE m.rowid IN (SELECT fts.rowid FROM messages_fts fts WHERE fts.parts MATCH ?)
 ORDER BY m.created_at DESC
 LIMIT ?
 `
 
 type SearchMessagesParams struct {
-	Column1 sql.NullString `json:"column_1"`
-	Limit   int64          `json:"limit"`
+	Parts string `json:"parts"`
+	Limit int64  `json:"limit"`
 }
 
 type SearchMessagesRow struct {
@@ -280,7 +280,7 @@ type SearchMessagesRow struct {
 }
 
 func (q *Queries) SearchMessages(ctx context.Context, arg SearchMessagesParams) ([]SearchMessagesRow, error) {
-	rows, err := q.query(ctx, q.searchMessagesStmt, searchMessages, arg.Column1, arg.Limit)
+	rows, err := q.query(ctx, q.searchMessagesStmt, searchMessages, arg.Parts, arg.Limit)
 	if err != nil {
 		return nil, err
 	}

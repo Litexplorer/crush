@@ -19,6 +19,30 @@ func TestSearchMessages_EmptyQuery(t *testing.T) {
 	}
 }
 
+// TestSearchMessages_SpecialCharacters verifies that queries containing
+// FTS5 syntax characters (quotes, operators, punctuation) are matched
+// verbatim instead of raising a parse error or being treated as query
+// syntax.
+func TestSearchMessages_SpecialCharacters(t *testing.T) {
+	svc, sessionID := newTestService(t)
+
+	hit := seedSearchMessage(t, svc, sessionID, `say "hi" and go -fast +now`)
+
+	for _, query := range []string{`say "hi"`, "go -fast", "AND", "x*2:3"} {
+		results, err := svc.SearchMessages(t.Context(), query, 10)
+		require.NoError(t, err, "query %q must not error", query)
+		for _, r := range results {
+			t.Logf("query %q -> %s (%s)", query, r.Message.ID, r.SessionTitle)
+		}
+	}
+
+	// The quoted phrase must still find the seeded message.
+	results, err := svc.SearchMessages(t.Context(), `say "hi"`, 10)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Equal(t, hit, results[0].Message.ID)
+}
+
 // TestSearchMessages_MatchesAndReturnsSessionTitles seeds two sessions
 // with messages and verifies keyword matching, case insensitivity,
 // session titles, ordering, and the limit.

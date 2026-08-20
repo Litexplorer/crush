@@ -512,9 +512,13 @@ func (s *service) SearchMessages(ctx context.Context, query string, limit int) (
 	if strings.TrimSpace(query) == "" {
 		return nil, nil
 	}
+	// Escape the query as a literal FTS5 phrase so special characters
+	// (quotes, operators, punctuation) are matched verbatim instead of
+	// being interpreted as query syntax or raising a parse error.
+	phrase := `"` + strings.ReplaceAll(query, `"`, `""`) + `"`
 	dbResults, err := s.q.SearchMessages(ctx, db.SearchMessagesParams{
-		Column1: sql.NullString{String: query, Valid: true},
-		Limit:   int64(limit),
+		Parts: phrase,
+		Limit: int64(limit),
 	})
 	if err != nil {
 		return nil, err
