@@ -14,13 +14,15 @@ import (
 // behavior (id index, scrolling) without full message rendering.
 type fakeChatItem struct {
 	*list.Versioned
-	id string
+	id        string
+	messageID string
 }
 
 var _ chat.MessageItem = (*fakeChatItem)(nil)
 var _ list.Focusable = (*fakeChatItem)(nil)
 
 func (f *fakeChatItem) ID() string                    { return f.id }
+func (f *fakeChatItem) MessageID() string             { return f.messageID }
 func (f *fakeChatItem) Render(width int) string       { return f.id }
 func (f *fakeChatItem) RawRender(width int) string    { return f.id }
 func (f *fakeChatItem) SetFocused(bool)               {}

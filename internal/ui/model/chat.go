@@ -408,11 +408,11 @@ func (m *Chat) SetMessages(msgs ...chat.MessageItem) tea.Cmd {
 
 	items := make([]list.Item, len(msgs))
 	for i, msg := range msgs {
-		m.idInxMap[msg.ID()] = i
+		registerID(msg, i, m.idInxMap)
 		// Register nested tool IDs for tools that contain nested tools.
 		if container, ok := msg.(chat.NestedToolContainer); ok {
 			for _, nested := range container.NestedTools() {
-				m.idInxMap[nested.ID()] = i
+				registerID(nested, i, m.idInxMap)
 			}
 		}
 		items[i] = msg
@@ -422,16 +422,31 @@ func (m *Chat) SetMessages(msgs ...chat.MessageItem) tea.Cmd {
 	return nil
 }
 
+// registerID indexes an item under its own ID and, for items that carry a
+// containing message ID (tool items), under that message ID as well. The
+// message-ID alias lets search-result jumps scroll to messages that render
+// only as tool items, whose own IDs are the tool call IDs.
+func registerID(item list.Item, index int, idInxMap map[string]int) {
+	if identifiable, ok := item.(interface{ ID() string }); ok {
+		idInxMap[identifiable.ID()] = index
+	}
+	if mid, ok := item.(interface{ MessageID() string }); ok {
+		if messageID := mid.MessageID(); messageID != "" {
+			idInxMap[messageID] = index
+		}
+	}
+}
+
 // AppendMessages appends a new message item to the chat list.
 func (m *Chat) AppendMessages(msgs ...chat.MessageItem) {
 	items := make([]list.Item, len(msgs))
 	indexOffset := m.list.Len()
 	for i, msg := range msgs {
-		m.idInxMap[msg.ID()] = indexOffset + i
+		registerID(msg, indexOffset+i, m.idInxMap)
 		// Register nested tool IDs for tools that contain nested tools.
 		if container, ok := msg.(chat.NestedToolContainer); ok {
 			for _, nested := range container.NestedTools() {
-				m.idInxMap[nested.ID()] = indexOffset + i
+				registerID(nested, indexOffset+i, m.idInxMap)
 			}
 		}
 		items[i] = msg
@@ -602,6 +617,7 @@ func (m *Chat) ScrollToMessage(id string) tea.Cmd {
 		m.list.SetSelected(idx)
 	}
 	m.list.ScrollToIndex(idx)
+	m.follow = m.AtBottom() // Disable follow mode if user scrolls up
 	return m.showScrollbar()
 }
 
@@ -807,7 +823,7 @@ func (m *Chat) RemoveMessage(id string) {
 	// Rebuild index map for all items after the removed one
 	for i := idx; i < m.list.Len(); i++ {
 		if item, ok := m.list.ItemAt(i).(chat.MessageItem); ok {
-			m.idInxMap[item.ID()] = i
+			registerID(item, i, m.idInxMap)
 		}
 	}
 
