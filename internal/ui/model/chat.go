@@ -807,28 +807,46 @@ func (m *Chat) ClearMessages() {
 	m.ClearMouse()
 }
 
-// RemoveMessage removes a message from the chat list by its ID.
+// RemoveMessage removes every item owned by the message with the given
+// ID. A single message renders as multiple items (content, per-tool-call
+// entries, and the end-of-turn info footer) that all alias the same
+// message ID, so we scan the list instead of trusting the idInxMap: the
+// map can only hold one index per key and the last registration (the
+// info footer) wins, which would leave the earlier items orphaned.
 func (m *Chat) RemoveMessage(id string) {
-	idx, ok := m.idInxMap[id]
-	if !ok {
-		return
-	}
-
-	// Remove from list
-	m.list.RemoveItem(idx)
-
-	// Remove from index map
-	delete(m.idInxMap, id)
-
-	// Rebuild index map for all items after the removed one
-	for i := idx; i < m.list.Len(); i++ {
-		if item, ok := m.list.ItemAt(i).(chat.MessageItem); ok {
-			registerID(item, i, m.idInxMap)
+	// Collect matching indices scanning from the end so removals do not
+	// shift indices that have not been visited yet.
+	var idxs []int
+	for i := m.list.Len() - 1; i >= 0; i-- {
+		item := m.list.ItemAt(i)
+		if identifiable, ok := item.(interface{ ID() string }); ok && identifiable.ID() == id {
+			idxs = append(idxs, i)
+			continue
+		}
+		if mid, ok := item.(interface{ MessageID() string }); ok && mid.MessageID() == id {
+			idxs = append(idxs, i)
 		}
 	}
+	if len(idxs) == 0 {
+		return
+	}
+	for _, idx := range idxs {
+		m.list.RemoveItem(idx)
+		delete(m.pausedAnimations, id)
+	}
 
-	// Clean up any paused animations for this message
-	delete(m.pausedAnimations, id)
+	// Rebuild the index map from scratch: positions and aliases shift
+	// whenever an item above them is removed.
+	m.idInxMap = make(map[string]int)
+	for i := 0; i < m.list.Len(); i++ {
+		item := m.list.ItemAt(i)
+		registerID(item, i, m.idInxMap)
+		if container, ok := item.(chat.NestedToolContainer); ok {
+			for _, nested := range container.NestedTools() {
+				registerID(nested, i, m.idInxMap)
+			}
+		}
+	}
 }
 
 // MessageItem returns the message item with the given ID, or nil if not found.
