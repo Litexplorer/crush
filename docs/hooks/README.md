@@ -17,8 +17,9 @@ forward.
 - Hooks are Claude Code-compatible
 - Crush ships with a builtin `crush-hook` skill write, edit, and configure
   hooks; just tell Crush how to configure Crush
-- Crush currently supports just one hook, `PreToolUse`, with plans to support
-  the full gamut; please let us know which hooks you'd like to see next
+- Crush currently supports two hooks, `PreToolUse` and `PostToolUse`, with
+  plans to support the full gamut; please let us know which hooks you'd like
+  to see next
 - Hooks run in parallel for speed, but their results compose in config order
   for determinism
 
@@ -176,7 +177,7 @@ wins when rewriting input, but first deny wins when blocking.
 
 ## Events
 
-Here are the events you can hook into (spoiler: there's currently just one):
+Here are the events you can hook into:
 
 ### PreToolUse
 
@@ -190,6 +191,7 @@ stuff, and so on.
 > [!NOTE]
 > Event names are case insensitive and snake-caseable, so `PreToolUse`,
 > `pretooluse`, `PRETOOLUSE`, `pre_tool_use`, and `PRE_TOOL_USE` all work.
+> `PostToolUse` (and `post_tool_use`, etc.) follows the same rules.
 
 **Scope**: `PreToolUse` only fires on the **top-level agent's** tool calls.
 Sub-agents (the `agent` task tool, `agentic_fetch`, etc.) run without hook
@@ -199,6 +201,29 @@ agent spawn sub-agents" still works.
 
 Hooks are keyed by event name. Only `command` is required, and you can omit
 `matcher` to match all tools.
+
+### PostToolUse
+
+This hook fires after a tool call completes. The tool has already run, so use
+it to inspect the result, verify side effects, or append context the model
+should see on the next step:
+
+- Auto-validate: after `write`/`edit`/`multiedit`, run `gofmt`, `go vet`, or
+  your test suite and feed the output back into the conversation.
+- Audit: log every tool call together with its output.
+- Guard rails: check that a command's output contains no secrets before the
+  model reads it.
+
+**Matched against**: the tool name, same as `PreToolUse`.
+
+**Input**: everything `PreToolUse` receives, plus `tool_response` — a JSON
+object with the tool's `content`, `error`, `metadata`, and a `truncated` flag
+(content is capped at 200KB).
+
+**Output**: `context` is appended to the tool's result, and `halt: true` (or
+`exit 49`) still stops the turn. `decision`, `updated_input`, and `exit 2` are
+**ignored** — the tool already ran, so there's nothing left to block or
+rewrite.
 
 ## Building Hooks
 
@@ -260,6 +285,12 @@ Standard input provides the full context as JSON:
   "cwd": "/home/user/project", // Working directory
   "tool_name": "bash", // The tool being called
   "tool_input": { "command": "rm -rf /" }, // The tool's input
+  "tool_response": { // Present only for PostToolUse events
+    "content": "…", // The tool's output (capped at 200KB)
+    "error": "", // Tool error message, if any
+    "metadata": "…", // Raw tool metadata
+    "truncated": false // True if content was truncated
+  }
 }
 ```
 
@@ -376,6 +407,26 @@ cat <<EOF
   "updated_input": {"command": "$rewritten"}
 }
 EOF
+```
+
+For `PostToolUse`, the same envelope applies but only `context` and `halt`
+are honored. Here's a hook that runs `go vet` after every file edit and feeds
+the result back to the model:
+
+```bash
+#!/usr/bin/env bash
+# Example: vet Go code after any file-write tool.
+
+read -r input
+tool_name=$(echo "$input" | jq -r '.tool_name')
+case "$tool_name" in
+  write|edit|multiedit)
+    vet_out=$(go vet ./... 2>&1)
+    if [ -n "$vet_out" ]; then
+      echo "{\"context\": \"go vet findings:\\n$vet_out\"}"
+    fi
+    ;;
+esac
 ```
 
 ### Multiple Hooks

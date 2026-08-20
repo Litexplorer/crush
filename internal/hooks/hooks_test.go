@@ -222,6 +222,38 @@ func TestBuildPayload(t *testing.T) {
 	require.Contains(t, s, `"tool_input":{"command":"ls"}`)
 }
 
+func TestBuildPayloadWithResponse(t *testing.T) {
+	t.Parallel()
+	payload := BuildPayloadWithResponse(
+		EventPostToolUse, "sess-1", "/work", "write",
+		`{"file_path":"/tmp/f.txt"}`,
+		`{"content":"done","error":"","metadata":"{}","truncated":false}`,
+	)
+	s := string(payload)
+	require.Contains(t, s, `"event":"`+EventPostToolUse+`"`)
+	require.Contains(t, s, `"tool_input":{"file_path":"/tmp/f.txt"}`)
+	require.Contains(t, s, `"tool_response":{"content":"done"`)
+	require.Contains(t, s, `"error":""`)
+}
+
+func TestBuildPayloadWithResponseSkipsInvalidJSON(t *testing.T) {
+	t.Parallel()
+	payload := BuildPayloadWithResponse(
+		EventPostToolUse, "sess-1", "/work", "write",
+		`{"file_path":"/tmp/f.txt"}`,
+		`not-json`,
+	)
+	s := string(payload)
+	require.Contains(t, s, `"event":"`+EventPostToolUse+`"`)
+	require.NotContains(t, s, "tool_response")
+}
+
+func TestBuildPayloadPostToolUseOmitsResponseByDefault(t *testing.T) {
+	t.Parallel()
+	payload := BuildPayload(EventPostToolUse, "sess-1", "/work", "write", `{}`)
+	require.NotContains(t, string(payload), "tool_response")
+}
+
 func TestRunnerExitCode0Allow(t *testing.T) {
 	t.Parallel()
 	hookCfg := config.HookConfig{

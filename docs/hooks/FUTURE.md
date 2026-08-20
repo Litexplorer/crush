@@ -7,6 +7,16 @@ scratchpad for what's next, not as documentation of current behavior.
 > [!NOTE]
 > This document was largely LLM-generated.
 
+## Recently implemented
+
+- **`PostToolUse` event** — implemented. Fires after a tool call completes;
+  the payload gains a `tool_response` field carrying the tool's output
+  (content capped at 200KB). `context` is appended to the tool result and
+  `halt` still stops the turn; `decision`/`updated_input`/`exit 2` are
+  ignored since the tool already ran. See `README.md` for the contract. The
+  design cautions in the `UserPromptSubmit` section below about output
+  scrubbing and size limits remain open and deliberately out of scope.
+
 ## `context_files`
 
 **Status:** planned, not implemented.
