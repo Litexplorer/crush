@@ -14,27 +14,29 @@ import (
 )
 
 // hookedTool wraps a fantasy.AgentTool to run PreToolUse hooks before
-// delegating to the inner tool.
+// delegating to the inner tool, and PostToolUse hooks after it returns.
 type hookedTool struct {
-	inner  fantasy.AgentTool
-	runner *hooks.Runner
+	inner      fantasy.AgentTool
+	runner     *hooks.Runner
+	postRunner *hooks.Runner
 }
 
-func newHookedTool(inner fantasy.AgentTool, runner *hooks.Runner) *hookedTool {
-	return &hookedTool{inner: inner, runner: runner}
+func newHookedTool(inner fantasy.AgentTool, runner, postRunner *hooks.Runner) *hookedTool {
+	return &hookedTool{inner: inner, runner: runner, postRunner: postRunner}
 }
 
 // wrapToolsWithHooks returns a tool slice with each entry wrapped in a
-// hookedTool. Returns the original slice unchanged when runner is nil or
-// when isSubAgent is true — sub-agents never fire hooks, the top-level
-// invocation of the sub-agent tool itself is wrapped on the caller's side.
-func wrapToolsWithHooks(tools []fantasy.AgentTool, runner *hooks.Runner, isSubAgent bool) []fantasy.AgentTool {
-	if runner == nil || isSubAgent {
+// hookedTool. Returns the original slice unchanged when both runners are
+// nil or when isSubAgent is true — sub-agents never fire hooks, the
+// top-level invocation of the sub-agent tool itself is wrapped on the
+// caller's side.
+func wrapToolsWithHooks(tools []fantasy.AgentTool, runner, postRunner *hooks.Runner, isSubAgent bool) []fantasy.AgentTool {
+	if (runner == nil && postRunner == nil) || isSubAgent {
 		return tools
 	}
 	out := make([]fantasy.AgentTool, len(tools))
 	for i, tool := range tools {
-		out[i] = newHookedTool(tool, runner)
+		out[i] = newHookedTool(tool, runner, postRunner)
 	}
 	return out
 }
@@ -86,6 +88,17 @@ func (h *hookedTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 	resp, err := h.inner.Run(ctx, call)
 	if err != nil {
 		return resp, err
+	}
+
+	if h.postRunner != nil {
+		postResult, postErr := h.postRunner.Run(ctx, hooks.EventPostToolUse, sessionID, call.Name, call.Input)
+		if postErr != nil {
+			slog.Warn("PostToolUse hook execution error",
+				"tool", call.Name, "error", postErr)
+		} else if postResult.HookCount > 0 {
+			slog.Debug("PostToolUse hooks completed",
+				"tool", call.Name, "hooks", postResult.HookCount)
+		}
 	}
 
 	if result.Context != "" {
