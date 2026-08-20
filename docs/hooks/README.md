@@ -225,6 +225,11 @@ object with the tool's `content`, `error`, `metadata`, and a `truncated` flag
 **ignored** — the tool already ran, so there's nothing left to block or
 rewrite.
 
+**TUI indicator**: both events' indicators appear on the tool card. When a
+tool call matches hooks from both events, the indicators stack in execution
+order — `PreToolUse` first, then `PostToolUse`. Since `PostToolUse` can't
+deny, its indicator always shows OK regardless of the hook's exit code.
+
 ## Building Hooks
 
 When a hook fires, Crush:
