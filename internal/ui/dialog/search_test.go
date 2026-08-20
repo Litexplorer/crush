@@ -127,3 +127,30 @@ func TestSearch_NewQueryRerunsInsteadOfSelecting(t *testing.T) {
 	require.True(t, ok, "changed query should re-run the search")
 	require.NotNil(t, cmdAction.Cmd)
 }
+
+// TestSearch_SelectedItemGetsFocused verifies the list's focused render
+// callback marks the selected item focused so it renders highlighted.
+func TestSearch_SelectedItemGetsFocused(t *testing.T) {
+	s, ws := newTestSearch(t)
+	ws.results = append(ws.results,
+		message.SearchResult{Message: message.Message{ID: "msg-2", SessionID: "sess-1"}, SessionTitle: "session one"},
+	)
+
+	s.setResults(ws.results)
+	require.Equal(t, 2, s.list.Len())
+
+	// Match the real dialog draw path: sizeDialogList calls SetSize
+	// before rendering, and only then do render callbacks fire.
+	s.list.SetSize(60, 10)
+
+	// Rendering with the list focused marks only the selected item.
+	_ = s.list.Render()
+	selected := s.list.SelectedItem().(*SearchResultItem)
+	require.True(t, selected.focused, "selected item must be marked focused")
+
+	// Move selection down; the newly selected item becomes focused.
+	s.list.SelectNext()
+	_ = s.list.Render()
+	selected = s.list.SelectedItem().(*SearchResultItem)
+	require.True(t, selected.focused, "newly selected item must be marked focused")
+}

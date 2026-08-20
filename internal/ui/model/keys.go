@@ -100,8 +100,8 @@ func DefaultKeyMap() KeyMap {
 			key.WithHelp("ctrl+s", "sessions"),
 		),
 		Search: key.NewBinding(
-			key.WithKeys("ctrl+/"),
-			key.WithHelp("ctrl+/", "search"),
+			key.WithKeys("ctrl+k", "ctrl+/"),
+			key.WithHelp("ctrl+k", "search"),
 		),
 		SummarizeSession: key.NewBinding(
 			key.WithKeys("ctrl+u"),

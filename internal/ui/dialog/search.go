@@ -58,6 +58,7 @@ func NewSearch(com *common.Common) *Search {
 	s.help = help
 
 	s.list = list.NewList()
+	s.list.RegisterRenderCallback(list.FocusedRenderCallback(s.list))
 	s.list.Focus()
 
 	s.input = textinput.New()

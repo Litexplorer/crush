@@ -86,7 +86,7 @@ func (h *header) drawHeader(
 	h.width = width
 	h.compact = compact
 
-	searchBtn := t.Header.Keystroke.Render("⌕") + t.Header.KeystrokeTip.Render(" search")
+	searchBtn := t.Header.Keystroke.Render("⌕") + t.Header.KeystrokeTip.Render(" ctrl+k")
 	searchBtnW := lipgloss.Width(searchBtn)
 
 	if !compact || session == nil {
