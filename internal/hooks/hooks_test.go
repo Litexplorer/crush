@@ -453,12 +453,18 @@ func TestValidateHooksNormalizesEventNames(t *testing.T) {
 	tests := []struct {
 		name  string
 		input string
+		want  string
 	}{
-		{"canonical", "PreToolUse"},
-		{"lowercase", "pretooluse"},
-		{"snake_case", "pre_tool_use"},
-		{"upper_snake", "PRE_TOOL_USE"},
-		{"mixed_case", "preToolUse"},
+		{"canonical", "PreToolUse", EventPreToolUse},
+		{"lowercase", "pretooluse", EventPreToolUse},
+		{"snake_case", "pre_tool_use", EventPreToolUse},
+		{"upper_snake", "PRE_TOOL_USE", EventPreToolUse},
+		{"mixed_case", "preToolUse", EventPreToolUse},
+		{"post_canonical", "PostToolUse", EventPostToolUse},
+		{"post_lowercase", "posttooluse", EventPostToolUse},
+		{"post_snake_case", "post_tool_use", EventPostToolUse},
+		{"post_upper_snake", "POST_TOOL_USE", EventPostToolUse},
+		{"post_mixed_case", "postToolUse", EventPostToolUse},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -471,7 +477,7 @@ func TestValidateHooksNormalizesEventNames(t *testing.T) {
 				},
 			}
 			require.NoError(t, cfg.ValidateHooks())
-			require.Len(t, cfg.Hooks[EventPreToolUse], 1)
+			require.Len(t, cfg.Hooks[tt.want], 1)
 		})
 	}
 }
