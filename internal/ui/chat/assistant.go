@@ -273,11 +273,6 @@ func (a *AssistantMessageItem) ID() string {
 	return a.message.ID
 }
 
-// MessageID returns the ID of the underlying assistant message.
-func (a *AssistantMessageItem) MessageID() string {
-	return a.message.ID
-}
-
 // RawRender implements [MessageItem].
 func (a *AssistantMessageItem) RawRender(width int) string {
 	cappedWidth := cappedMessageWidth(width)

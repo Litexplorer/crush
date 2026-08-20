@@ -56,12 +56,6 @@ type MessageItem interface {
 	Identifiable
 }
 
-// MessageIDProvider is implemented by message items that can resolve
-// the ID of the underlying [message.Message] they render.
-type MessageIDProvider interface {
-	MessageID() string
-}
-
 // HighlightableMessageItem is a message item that supports highlighting.
 type HighlightableMessageItem interface {
 	MessageItem
@@ -307,11 +301,6 @@ func (a *AssistantInfoItem) ID() string {
 	return a.id
 }
 
-// MessageID returns the ID of the underlying assistant message.
-func (a *AssistantInfoItem) MessageID() string {
-	return a.message.ID
-}
-
 // RawRender implements MessageItem.
 func (a *AssistantInfoItem) RawRender(width int) string {
 	innerWidth := max(0, width-MessageLeftPaddingTotal)
@@ -382,9 +371,7 @@ func ExtractMessageItems(sty *styles.Styles, msg *message.Message, toolResults m
 		var items []MessageItem
 		for _, part := range msg.Parts {
 			if sc, ok := part.(message.ShellCommand); ok {
-				item := NewShellItem(sty, sc.Command, sc.Output, sc.ExitCode)
-				item.SetMessageID(msg.ID)
-				items = append(items, item)
+				items = append(items, NewShellItem(sty, sc.Command, sc.Output, sc.ExitCode))
 			}
 		}
 		if len(items) > 0 {

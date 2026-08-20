@@ -64,14 +64,6 @@ type Service interface {
 	Delete(ctx context.Context, id string) error
 	DeleteSessionMessages(ctx context.Context, sessionID string) error
 
-	// DeleteTurn deletes one complete user turn from a session: the
-	// user message anchoring the turn plus every message that follows
-	// it up to (but not including) the next user message. If
-	// anchorMessageID is not itself a user message, the enclosing turn
-	// is resolved by walking back to the nearest preceding user
-	// message. It returns the deleted messages in chronological order.
-	DeleteTurn(ctx context.Context, sessionID string, anchorMessageID string) ([]Message, error)
-
 	// Flush synchronously drains any pending debounced state for the
 	// given message ID, performs the SQL write, and publishes the
 	// resulting [pubsub.UpdatedEvent]. Idempotent; cheap no-op if no
@@ -227,42 +219,6 @@ func (s *service) DeleteSessionMessages(ctx context.Context, sessionID string) e
 		}
 	}
 	return nil
-}
-
-// DeleteTurn implements [Service.DeleteTurn].
-func (s *service) DeleteTurn(ctx context.Context, sessionID string, anchorMessageID string) ([]Message, error) {
-	messages, err := s.List(ctx, sessionID)
-	if err != nil {
-		return nil, err
-	}
-	start := -1
-	for i, m := range messages {
-		if m.ID == anchorMessageID {
-			start = i
-			break
-		}
-	}
-	if start == -1 {
-		return nil, fmt.Errorf("message %q not found in session %q", anchorMessageID, sessionID)
-	}
-	// Resolve the anchor to the start of its turn by walking back to
-	// the nearest preceding user message.
-	for start > 0 && messages[start].Role != User {
-		start--
-	}
-	var deleted []Message
-	for i := start; i < len(messages); i++ {
-		if i > start && messages[i].Role == User {
-			break
-		}
-		deleted = append(deleted, messages[i])
-	}
-	for _, m := range deleted {
-		if err := s.Delete(ctx, m.ID); err != nil {
-			return nil, err
-		}
-	}
-	return deleted, nil
 }
 
 // Update accepts a new state for a message and either flushes

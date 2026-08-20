@@ -159,11 +159,6 @@ func (m *UserMessageItem) ID() string {
 	return m.message.ID
 }
 
-// MessageID returns the ID of the underlying user message.
-func (m *UserMessageItem) MessageID() string {
-	return m.message.ID
-}
-
 // renderAttachments renders attachments.
 func (m *UserMessageItem) renderAttachments(width int) string {
 	var attachments []message.Attachment

@@ -136,11 +136,6 @@ type Workspace interface {
 	ListAllUserMessages(ctx context.Context) ([]message.Message, error)
 	SearchMessages(ctx context.Context, query string, limit int) ([]message.SearchResult, error)
 
-	// DeleteTurn deletes the complete user turn containing
-	// anchorMessageID and returns the deleted messages in chronological
-	// order.
-	DeleteTurn(ctx context.Context, sessionID string, anchorMessageID string) ([]message.Message, error)
-
 	// Agent
 	AgentRun(ctx context.Context, sessionID, prompt string, attachments ...message.Attachment) error
 	AgentRunShellCommand(ctx context.Context, sessionID, command string, termWidth int, onProgress func(string), isFirstMessage bool) (proto.ShellCommandResponse, error)

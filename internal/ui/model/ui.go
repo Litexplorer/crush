@@ -218,11 +218,6 @@ type UI struct {
 	// isCanceling tracks whether the user has pressed escape once to cancel.
 	isCanceling bool
 
-	// deleteTurnConfirm is true when the user pressed ctrl+x on a
-	// selected message and is awaiting y/n confirmation before the
-	// enclosing turn is deleted.
-	deleteTurnConfirm bool
-
 	// bangMode tracks whether the editor is in bang (!) shell mode.
 	bangMode     bool
 	bangWasEmpty bool // true when bang prompt became empty on last keystroke
@@ -948,13 +943,6 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.updateSessionMessage(msg.Payload))
 		case pubsub.DeletedEvent:
 			m.chat.RemoveMessage(msg.Payload.ID)
-			// A single message renders as multiple items (content,
-			// per-tool-call entries, and the end-of-turn info footer),
-			// so remove every item owned by the deleted message.
-			for _, tc := range msg.Payload.ToolCalls() {
-				m.chat.RemoveMessage(tc.ID)
-			}
-			m.chat.RemoveMessage(chat.AssistantInfoID(msg.Payload.ID))
 		}
 		// start the spinner if there is a new message
 		if hasInProgressTodo(m.session.Todos) && m.isAgentBusy() && !m.todoIsSpinning {
@@ -2817,38 +2805,6 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 			}
 		case uiFocusMain:
 			switch {
-			case m.deleteTurnConfirm:
-				switch {
-				case key.Matches(msg, m.keyMap.Initialize.Yes):
-					anchorID := m.chat.SelectedMessageID()
-					m.deleteTurnConfirm = false
-					if anchorID == "" || m.session == nil {
-						break
-					}
-					sessionID := m.session.ID
-					cmds = append(cmds, func() tea.Msg {
-						_, err := m.com.Workspace.DeleteTurn(context.Background(), sessionID, anchorID)
-						if err != nil {
-							return util.NewErrorMsg(err)
-						}
-						return nil
-					})
-				case key.Matches(msg, m.keyMap.Initialize.No):
-					m.deleteTurnConfirm = false
-				}
-			case key.Matches(msg, m.keyMap.Chat.DeleteTurn):
-				if m.session == nil {
-					break
-				}
-				if m.isAgentBusy() {
-					cmds = append(cmds, util.ReportWarn("Agent is busy, please wait before deleting a turn..."))
-					break
-				}
-				if m.chat.SelectedMessageID() == "" {
-					cmds = append(cmds, util.ReportWarn("Select a message first to delete its turn"))
-					break
-				}
-				m.deleteTurnConfirm = true
 			case key.Matches(msg, m.keyMap.Tab):
 				m.focus = uiFocusEditor
 				m.sidebarScrollbarVisible = false
@@ -4111,13 +4067,8 @@ func (m *UI) renderEditorView(width int) string {
 	if len(m.attachments.List()) > 0 {
 		attachmentsView = m.attachments.Render(width)
 	}
-	var confirmView string
-	if m.deleteTurnConfirm {
-		confirmView = m.com.Styles.Editor.QuestionConfirm.Render("Delete this turn? (y/n)")
-	}
 	return strings.Join([]string{
 		attachmentsView,
-		confirmView,
 		m.textarea.View(),
 		"", // margin at bottom of editor
 	}, "\n")

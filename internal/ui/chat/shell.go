@@ -33,7 +33,6 @@ type ShellItem struct {
 	*focusableMessageItem
 
 	id              string
-	messageID       string
 	command         string
 	output          strings.Builder
 	exitCode        int
@@ -53,7 +52,7 @@ var (
 )
 
 // NewShellItem creates a new ShellItem for displaying bang-mode results.
-func NewShellItem(sty *styles.Styles, command, output string, exitCode int) *ShellItem {
+func NewShellItem(sty *styles.Styles, command, output string, exitCode int) MessageItem {
 	v := list.NewVersioned()
 	s := &ShellItem{
 		Versioned:                v,
@@ -121,13 +120,6 @@ func (s *ShellItem) replaceOutput(output string) {
 func (s *ShellItem) ID() string          { return s.id }
 func (s *ShellItem) FilterValue() string { return s.command }
 func (s *ShellItem) Finished() bool      { return !s.pending }
-
-// SetMessageID sets the ID of the message that produced this shell item.
-func (s *ShellItem) SetMessageID(id string) { s.messageID = id }
-
-// MessageID returns the ID of the owning message, or "" for ad-hoc
-// bang-mode results that are not part of a persisted message.
-func (s *ShellItem) MessageID() string { return s.messageID }
 
 // StartAnimation starts the spinner animation for pending shell items.
 func (s *ShellItem) StartAnimation() tea.Cmd {

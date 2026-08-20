@@ -844,17 +844,6 @@ func (m *Chat) MessageItem(id string) chat.MessageItem {
 	return item
 }
 
-// SelectedMessageID returns the ID of the message that owns the
-// currently selected item, or "" when the selection cannot be mapped
-// to a persisted message.
-func (m *Chat) SelectedMessageID() string {
-	item := m.list.SelectedItem()
-	if p, ok := item.(chat.MessageIDProvider); ok {
-		return p.MessageID()
-	}
-	return ""
-}
-
 // ToggleExpandedSelectedItem expands the selected message item if it is expandable.
 func (m *Chat) ToggleExpandedSelectedItem() {
 	if expandable, ok := m.list.SelectedItem().(chat.Expandable); ok {
