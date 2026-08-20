@@ -672,7 +672,10 @@ func (l *List) RemoveItem(idx int) {
 
 	// Adjust selection if needed
 	if l.selectedIdx == idx {
-		l.selectedIdx = -1
+		// The selected item was removed. Keep the selection on the item
+		// that slid into its slot (the next item), or clamp to the new
+		// last item when the removed item was the last one.
+		l.selectedIdx = min(idx, len(l.items)-1)
 	} else if l.selectedIdx > idx {
 		l.selectedIdx--
 	}
