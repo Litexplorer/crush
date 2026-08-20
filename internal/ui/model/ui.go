@@ -943,6 +943,13 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.updateSessionMessage(msg.Payload))
 		case pubsub.DeletedEvent:
 			m.chat.RemoveMessage(msg.Payload.ID)
+			// A single message renders as multiple items (content,
+			// per-tool-call entries, and the end-of-turn info footer),
+			// so remove every item owned by the deleted message.
+			for _, tc := range msg.Payload.ToolCalls() {
+				m.chat.RemoveMessage(tc.ID)
+			}
+			m.chat.RemoveMessage(chat.AssistantInfoID(msg.Payload.ID))
 		}
 		// start the spinner if there is a new message
 		if hasInProgressTodo(m.session.Todos) && m.isAgentBusy() && !m.todoIsSpinning {
@@ -2829,6 +2836,19 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 				}
 			case key.Matches(msg, m.keyMap.Chat.Expand):
 				m.chat.ToggleExpandedSelectedItem()
+			case key.Matches(msg, m.keyMap.Chat.DeleteTurn):
+				if m.session == nil {
+					break
+				}
+				if m.isAgentBusy() {
+					cmds = append(cmds, util.ReportWarn("Agent is busy, please wait before deleting a turn..."))
+					break
+				}
+				if m.chat.SelectedMessageID() == "" {
+					cmds = append(cmds, util.ReportWarn("Select a message first to delete its turn"))
+					break
+				}
+				m.openDeleteTurnConfirm()
 			case key.Matches(msg, m.keyMap.Chat.Up):
 				if cmd := m.chat.ScrollByAndAnimate(-1); cmd != nil {
 					cmds = append(cmds, cmd)
@@ -4611,6 +4631,50 @@ func (m *UI) openBatchFormDialog(batch question.Request) {
 	form.OnCancel = func() {
 		m.com.Workspace.QuestionCancel()
 	}
+	m.activeInline = form
+	m.textarea.Blur()
+	m.focus = uiFocusEditor
+	m.activeInline.SetFocused(true)
+	m.updateLayoutAndSize()
+}
+
+// openDeleteTurnConfirm activates an inline yes/no form asking to confirm
+// deleting the turn anchored at the currently selected message. The form
+// uses the activeInline mechanism (like batch question forms), so its
+// height participates in the editor layout instead of overflowing it.
+// Confirming deletes the turn via the workspace; cancel just closes.
+func (m *UI) openDeleteTurnConfirm() {
+	anchorID := m.chat.SelectedMessageID()
+	if anchorID == "" || m.session == nil {
+		return
+	}
+	sessionID := m.session.ID
+
+	// Close any existing question form first to prevent stacking.
+	if qf, ok := m.activeInline.(*dialog.QuestionForm); ok && qf != nil {
+		m.activeInline = nil
+	}
+
+	batch := question.Request{
+		ID:        "delete_turn_confirm",
+		SessionID: sessionID,
+		Questions: []question.Question{
+			{
+				ID:   "confirm_delete_turn",
+				Type: question.TypeYesNo,
+				Text: "Delete this turn and all its messages?",
+			},
+		},
+	}
+
+	form := dialog.NewQuestionForm(m.com.Styles, batch)
+	form.OnAnswer = func(responses []question.Answer) {
+		if len(responses) > 0 && responses[0].Yes != nil && *responses[0].Yes {
+			m.com.Workspace.DeleteTurn(context.Background(), sessionID, anchorID)
+		}
+	}
+	form.OnCancel = func() {} // Not bound to the workspace question channel.
+
 	m.activeInline = form
 	m.textarea.Blur()
 	m.focus = uiFocusEditor
