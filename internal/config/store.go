@@ -596,14 +596,6 @@ func (s *ConfigStore) SetTransparentBackground(scope Scope, enabled bool) error 
 	})
 }
 
-// SetManualScroll sets the manual scroll setting and persists it.
-func (s *ConfigStore) SetManualScroll(scope Scope, enabled bool) error {
-	return s.update(scope, func(c *Config) map[string]any {
-		c.ensureTUI().ManualScroll = &enabled
-		return map[string]any{"options.tui.manual_scroll": enabled}
-	})
-}
-
 // SetProviderAPIKey sets the API key for a provider and persists it.
 func (s *ConfigStore) SetProviderAPIKey(scope Scope, providerID string, apiKey any) error {
 	var providerConfig ProviderConfig
