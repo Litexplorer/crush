@@ -118,6 +118,11 @@ type Chat struct {
 	// bottom on new messages.
 	follow bool
 
+	// manualScroll disables automatic scroll-to-bottom on new messages.
+	// When enabled, the view stays put as content streams and only moves
+	// when the user scrolls manually.
+	manualScroll bool
+
 	// drawCache memoizes the decoded form of the last list.Render output so
 	// repeat frames with byte-identical content skip the per-cell ANSI
 	// reparse that uv.StyledString.Draw performs every call. See F9
@@ -230,8 +235,10 @@ func (m *Chat) Draw(scr uv.Screen, area uv.Rectangle) {
 	rendered := m.list.Render()
 	// If we're in follow mode but the render revealed we're no longer at
 	// the bottom (e.g. streaming content grew an item), re-anchor and
-	// re-render so the view stays pinned to the end.
-	if m.follow && !m.list.AtBottom() {
+	// re-render so the view stays pinned to the end. Manual scroll mode
+	// suppresses this re-anchoring: the view only moves when the user
+	// scrolls manually.
+	if m.follow && !m.manualScroll && !m.list.AtBottom() {
 		m.list.ScrollToBottom()
 		rendered = m.list.Render()
 	}
@@ -559,9 +566,16 @@ func (m *Chat) AtBottom() bool {
 }
 
 // Follow returns whether the chat view is in follow mode (auto-scroll to
-// bottom on new messages).
+// bottom on new messages). Manual scroll mode suppresses follow.
 func (m *Chat) Follow() bool {
-	return m.follow
+	return m.follow && !m.manualScroll
+}
+
+// SetManualScroll enables or disables manual scroll mode. When enabled, the
+// view no longer auto-scrolls to bottom on new messages; the user must scroll
+// manually.
+func (m *Chat) SetManualScroll(enabled bool) {
+	m.manualScroll = enabled
 }
 
 // ScrollToBottom scrolls the chat view to the bottom.

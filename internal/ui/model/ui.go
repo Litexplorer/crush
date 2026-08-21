@@ -427,6 +427,9 @@ func New(com *common.Common, initialSessionID string, continueLast bool) *UI {
 		scrollbarMode = cfg.Options.TUI.Scrollbar
 	}
 	ch := NewChat(com, scrollbarMode)
+	if cfg := com.Config(); cfg.Options.TUI != nil && cfg.Options.TUI.ManualScroll != nil {
+		ch.SetManualScroll(*cfg.Options.TUI.ManualScroll)
+	}
 
 	keyMap := DefaultKeyMap()
 
@@ -2031,6 +2034,27 @@ func (m *UI) handleDialogMsg(msg tea.Msg) tea.Cmd {
 				status = "enabled"
 			}
 			return util.NewInfoMsg("Transparent background " + status)
+		})
+		m.dialog.CloseDialog(dialog.CommandsID)
+	case dialog.ActionToggleManualScroll:
+		cmds = append(cmds, func() tea.Msg {
+			cfg := m.com.Config()
+			if cfg == nil {
+				return util.ReportError(errors.New("configuration not found"))()
+			}
+
+			isManualScroll := cfg.Options != nil && cfg.Options.TUI.ManualScroll != nil && *cfg.Options.TUI.ManualScroll
+			newValue := !isManualScroll
+			if err := m.com.Workspace.SetConfigField(config.ScopeGlobal, "options.tui.manual_scroll", newValue); err != nil {
+				return util.ReportError(err)()
+			}
+			m.chat.SetManualScroll(newValue)
+
+			status := "disabled"
+			if newValue {
+				status = "enabled"
+			}
+			return util.NewInfoMsg("Manual scroll " + status)
 		})
 		m.dialog.CloseDialog(dialog.CommandsID)
 	case dialog.ActionQuit:

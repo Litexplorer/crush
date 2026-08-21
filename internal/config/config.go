@@ -269,6 +269,10 @@ type TUIOptions struct {
 	Completions Completions `json:"completions,omitzero" jsonschema:"description=Completions UI options"`
 	Transparent *bool       `json:"transparent,omitempty" jsonschema:"description=Enable transparent background for the TUI interface,default=false"`
 	Scrollbar   string      `json:"scrollbar,omitempty" jsonschema:"description=Chat scrollbar visibility,enum=default,enum=always,enum=never,default=default"`
+	// ManualScroll disables automatic scroll-to-bottom while content is
+	// streaming. When enabled, the view stays put on new messages and only
+	// moves when the user scrolls manually.
+	ManualScroll *bool `json:"manual_scroll,omitempty" jsonschema:"description=Disable automatic scrolling to the bottom while content streams; the view only moves when the user scrolls manually,default=false"`
 }
 
 // Completions defines options for the completions UI.
