@@ -550,7 +550,7 @@ func (c *Commands) defaultCommands() []*CommandItem {
 	if cfg != nil && cfg.Options != nil && cfg.Options.TUI != nil && cfg.Options.TUI.ManualScroll != nil && *cfg.Options.TUI.ManualScroll {
 		manualScrollLabel = "Disable Manual Scroll"
 	}
-	commands = append(commands, NewCommandItem(c.com.Styles, "toggle_manual_scroll", manualScrollLabel, "", ActionToggleManualScroll{}))
+	commands = append(commands, NewCommandItem(c.com.Styles, "toggle_manual_scroll", manualScrollLabel, "ctrl+a", ActionToggleManualScroll{}))
 
 	commands = append(
 		commands,

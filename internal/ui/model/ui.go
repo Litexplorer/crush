@@ -2037,25 +2037,7 @@ func (m *UI) handleDialogMsg(msg tea.Msg) tea.Cmd {
 		})
 		m.dialog.CloseDialog(dialog.CommandsID)
 	case dialog.ActionToggleManualScroll:
-		cmds = append(cmds, func() tea.Msg {
-			cfg := m.com.Config()
-			if cfg == nil {
-				return util.ReportError(errors.New("configuration not found"))()
-			}
-
-			isManualScroll := cfg.Options != nil && cfg.Options.TUI.ManualScroll != nil && *cfg.Options.TUI.ManualScroll
-			newValue := !isManualScroll
-			if err := m.com.Workspace.SetConfigField(config.ScopeGlobal, "options.tui.manual_scroll", newValue); err != nil {
-				return util.ReportError(err)()
-			}
-			m.chat.SetManualScroll(newValue)
-
-			status := "disabled"
-			if newValue {
-				status = "enabled"
-			}
-			return util.NewInfoMsg("Manual scroll " + status)
-		})
+		cmds = append(cmds, m.toggleManualScroll())
 		m.dialog.CloseDialog(dialog.CommandsID)
 	case dialog.ActionQuit:
 		cmds = append(cmds, tea.Quit)
@@ -2534,6 +2516,9 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 				status = "enabled"
 			}
 			cmds = append(cmds, util.ReportInfo("Yolo mode "+status))
+			return true
+		case key.Matches(msg, m.keyMap.ToggleManualScroll):
+			cmds = append(cmds, m.toggleManualScroll())
 			return true
 		}
 		return false
@@ -3487,6 +3472,31 @@ func (m *UI) toggleCompactMode() tea.Cmd {
 	m.updateLayoutAndSize()
 
 	return nil
+}
+
+// toggleManualScroll flips the manual scroll setting, persists it, and updates
+// the chat view. Shared by the direct keybinding (ctrl+a) and the
+// commands-dialog action so both stay write-through.
+func (m *UI) toggleManualScroll() tea.Cmd {
+	return func() tea.Msg {
+		cfg := m.com.Config()
+		if cfg == nil {
+			return util.ReportError(errors.New("configuration not found"))()
+		}
+
+		isManualScroll := cfg.Options != nil && cfg.Options.TUI.ManualScroll != nil && *cfg.Options.TUI.ManualScroll
+		newValue := !isManualScroll
+		if err := m.com.Workspace.SetConfigField(config.ScopeGlobal, "options.tui.manual_scroll", newValue); err != nil {
+			return util.ReportError(err)()
+		}
+		m.chat.SetManualScroll(newValue)
+
+		status := "disabled"
+		if newValue {
+			status = "enabled"
+		}
+		return util.NewInfoMsg("Manual scroll " + status)
+	}
 }
 
 // updateLayoutAndSize updates the layout and sizes of UI components.

@@ -72,6 +72,10 @@ type KeyMap struct {
 	SummarizeSession key.Binding
 	Tab              key.Binding
 	ToggleYolo       key.Binding
+	// ToggleManualScroll toggles manual scroll mode. It is intentionally not
+	// exposed in the bottom help bar (no WithHelp); the shortcut is shown in
+	// the commands palette instead.
+	ToggleManualScroll key.Binding
 }
 
 func DefaultKeyMap() KeyMap {
@@ -115,6 +119,9 @@ func DefaultKeyMap() KeyMap {
 		ToggleYolo: key.NewBinding(
 			key.WithKeys("ctrl+y"),
 			key.WithHelp("ctrl+y", "toggle yolo"),
+		),
+		ToggleManualScroll: key.NewBinding(
+			key.WithKeys("ctrl+a"),
 		),
 	}
 
