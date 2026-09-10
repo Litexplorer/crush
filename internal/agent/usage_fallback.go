@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"unicode/utf8"
 
 	"charm.land/fantasy"
 )
@@ -168,9 +169,24 @@ func estimateSourceTokens(source fantasy.SourceContent) int64 {
 		approxTokenCount(source.Filename)
 }
 
+// approxTokenCount returns a rough estimate of how many tokens a string
+// occupies when sent to an LLM. ASCII text is estimated with the common
+// ~4-chars-per-token heuristic, while non-ASCII runes (CJK, accented letters,
+// emoji) are weighted closer to one token per rune because tokenizers pack
+// those characters far more densely. The estimate feeds the auto-summarize
+// threshold, so erring slightly high is deliberate: it compacts the context
+// before it overflows rather than after.
 func approxTokenCount(s string) int64 {
 	if s == "" {
 		return 0
 	}
-	return int64((len(s) + 3) / 4)
+	var ascii, nonASCII int
+	for _, r := range s {
+		if r < utf8.RuneSelf {
+			ascii++
+		} else {
+			nonASCII++
+		}
+	}
+	return int64((ascii+3)/4 + nonASCII)
 }

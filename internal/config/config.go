@@ -274,11 +274,20 @@ type TUIOptions struct {
 	DiffMode    string `json:"diff_mode,omitempty" jsonschema:"description=Diff mode for the TUI interface,enum=unified,enum=split"`
 	// Here we can add themes later or any TUI related options
 	//
+	// ThemeFile is the path to an OpenCode-format theme JSON file. When set,
+	// it overrides the provider-based theme selection. The file must contain
+	// a "dark.palette" object with at least a "neutral" color; all other
+	// palette entries are optional and fall back to the neutral/ink pair.
+	ThemeFile string `json:"theme_file,omitempty" jsonschema:"description=Path to an OpenCode-format theme JSON file that overrides the provider-based theme,example=~/.config/crush/themes/custom.json"`
 
 	Completions Completions `json:"completions,omitzero" jsonschema:"description=Completions UI options"`
 	Transparent *bool       `json:"transparent,omitempty" jsonschema:"description=Enable transparent background for the TUI interface,default=false"`
 	Scrollbar   string      `json:"scrollbar,omitempty" jsonschema:"description=Chat scrollbar visibility,enum=default,enum=always,enum=never,default=default"`
-	ExitBanner  ExitBanner  `json:"exit_banner,omitempty" jsonschema:"description=Exit banner style after quitting Crush,enum=default,enum=compact,enum=none,default=default"`
+	// ManualScroll disables automatic scroll-to-bottom while content is
+	// streaming. When enabled, the view stays put on new messages and only
+	// moves when the user scrolls manually.
+	ManualScroll *bool      `json:"manual_scroll,omitempty" jsonschema:"description=Disable automatic scrolling to the bottom while content streams; the view only moves when the user scrolls manually,default=false"`
+	ExitBanner   ExitBanner `json:"exit_banner,omitempty" jsonschema:"description=Exit banner style after quitting Crush,enum=default,enum=compact,enum=none,default=default"`
 }
 
 // IsTransparent reports whether the TUI draws a transparent background. The
@@ -378,6 +387,29 @@ type Options struct {
 	Progress                  *bool        `json:"progress,omitempty" jsonschema:"description=Show indeterminate progress updates during long operations,default=true"`
 	Notifications             string       `json:"notifications,omitempty" jsonschema:"description=Notification style to use. Options: auto (default)\\, native\\, osc\\, bell\\, disabled. Auto selects based on environment: native for local sessions\\, osc for SSH (with automatic OSC 99/777 detection).,enum=auto,enum=native,enum=osc,enum=bell,enum=disabled,default=auto"`
 	DisabledSkills            []string     `json:"disabled_skills,omitempty" jsonschema:"description=List of skill names to disable and hide from the agent,example=crush-config"`
+	RequestTimeout            *int         `json:"request_timeout,omitempty" jsonschema:"description=Timeout in seconds for each LLM API request. Streaming responses are aborted only after this much inactivity\\, so slow but active streams are never killed. 0 disables it\\, negative values are invalid.,default=60,example=120,example=300,example=0"`
+}
+
+// DefaultRequestTimeout bounds each LLM API request when the user has not
+// configured a timeout. Slow or unreachable providers fail after it instead
+// of blocking a session forever; streamed responses are only aborted after
+// this much inactivity, and users running slow local models can raise or
+// disable it via options.request_timeout.
+const DefaultRequestTimeout = time.Minute
+
+// GetRequestTimeout returns the per-request timeout for LLM API calls (a
+// hard deadline for non-streaming requests and an idle timeout for
+// streams), or zero when disabled. The nil receiver and the unset field
+// both mean DefaultRequestTimeout, so callers can ask without unwrapping
+// either.
+func (o *Options) GetRequestTimeout() time.Duration {
+	if o == nil || o.RequestTimeout == nil {
+		return DefaultRequestTimeout
+	}
+	if *o.RequestTimeout <= 0 {
+		return 0
+	}
+	return time.Duration(*o.RequestTimeout) * time.Second
 }
 
 type MCPs map[string]MCPConfig
@@ -853,7 +885,7 @@ func (c *Config) SmallModel() *catwalk.Model {
 	return c.GetModel(model.Provider, model.Model)
 }
 
-const maxRecentModelsPerType = 5
+const maxRecentModelsPerType = 10
 
 func allToolNames() []string {
 	return []string{
@@ -866,6 +898,7 @@ func allToolNames() []string {
 		"download",
 		"edit",
 		"multiedit",
+		"apply_patch",
 		"lsp_diagnostics",
 		"lsp_references",
 		"lsp_restart",
@@ -874,14 +907,17 @@ func allToolNames() []string {
 		"lsp_call_hierarchy",
 		"lsp_rename",
 		"lsp_replace_symbol",
+		"lsp_outline",
 		"fetch",
 		"agentic_fetch",
+		"file_finder",
 		"glob",
 		"grep",
 		"ls",
 		"question",
 		"sourcegraph",
 		"todos",
+		"terminal",
 		"view",
 		"write",
 		"list_mcp_resources",
@@ -895,12 +931,6 @@ func resolveAllowedTools(allTools []string, disabledTools []string) []string {
 	}
 	// filter out disabled tools (exclude mode)
 	return filterSlice(allTools, disabledTools, false)
-}
-
-func resolveReadOnlyTools(tools []string) []string {
-	readOnlyTools := []string{"glob", "grep", "ls", "lsp_call_hierarchy", "lsp_definition", "lsp_symbols", "sourcegraph", "view"}
-	// filter to only include tools that are in allowedtools (include mode)
-	return filterSlice(tools, readOnlyTools, true)
 }
 
 func filterSlice(data []string, mask []string, include bool) []string {
@@ -934,9 +964,12 @@ func (c *Config) SetupAgents() {
 			Description:  "An agent that helps with searching for context and finding implementation details.",
 			Model:        SelectedModelTypeLarge,
 			ContextPaths: c.Options.ContextPaths,
-			AllowedTools: resolveReadOnlyTools(allowedTools),
-			// NO MCPs or LSPs by default
-			AllowedMCP: map[string][]string{},
+			// The task agent runs with the full tool set, same as the
+			// coder agent, so delegated work can read, edit, and run
+			// commands without a restricted tool surface.
+			AllowedTools: allowedTools,
+			// Nil means every MCP tool is available to this agent.
+			AllowedMCP: nil,
 		},
 	}
 	c.Agents = agents

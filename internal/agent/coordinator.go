@@ -680,7 +680,13 @@ func (c *coordinator) buildAgent(ctx context.Context, prompt *prompt.Prompt, age
 
 func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubAgent bool) ([]fantasy.AgentTool, error) {
 	var allTools []fantasy.AgentTool
-	if slices.Contains(agent.AllowedTools, AgentToolName) {
+	// Sub-agents never get the agent tool. agentTool builds a task agent,
+	// whose own tool build passes through here again, so offering it to a
+	// sub-agent would recurse through the readiness errgroup without bound
+	// (thousands of goroutines pegged on one mutex). Nesting is depth-1 by
+	// design; keeping the guard here means it no longer depends on the task
+	// agent's allowlist happening to omit "agent".
+	if !isSubAgent && slices.Contains(agent.AllowedTools, AgentToolName) {
 		agentTool, err := c.agentTool(ctx)
 		if err != nil {
 			return nil, err
@@ -722,15 +728,24 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 		tools.NewDownloadTool(c.permissions, c.cfg.WorkingDir(), nil),
 		tools.NewEditTool(c.lspManager, c.permissions, c.history, c.filetracker, c.cfg.WorkingDir()),
 		tools.NewMultiEditTool(c.lspManager, c.permissions, c.history, c.filetracker, c.cfg.WorkingDir()),
+		tools.NewApplyPatchTool(c.lspManager, c.permissions, c.history, c.filetracker, c.cfg.WorkingDir()),
 		tools.NewFetchTool(c.permissions, c.cfg.WorkingDir(), nil),
+		tools.NewFileFinderTool(c.cfg.WorkingDir()),
 		tools.NewGlobTool(c.cfg.WorkingDir(), c.cfg.Config().Tools.Glob),
 		tools.NewGrepTool(c.cfg.WorkingDir(), c.cfg.Config().Tools.Grep),
 		tools.NewLsTool(c.permissions, c.cfg.WorkingDir(), c.cfg.Config().Tools.Ls),
 		tools.NewSourcegraphTool(nil),
 		tools.NewTodosTool(c.sessions),
-		tools.NewViewTool(c.lspManager, c.permissions, c.filetracker, c.skillTracker, c.cfg.WorkingDir(), c.cfg.Config().Options.SkillsPaths...),
-		tools.NewWriteTool(c.lspManager, c.permissions, c.history, c.filetracker, c.cfg.WorkingDir()),
+		tools.NewViewTool(c.lspManager, c.permissions, c.filetracker, c.skillTracker, c.cfg.WorkingDir(), c.cfg.Overrides().FileClient, c.cfg.Config().Options.SkillsPaths...),
+		tools.NewWriteTool(c.lspManager, c.permissions, c.history, c.filetracker, c.cfg.WorkingDir(), c.cfg.Overrides().FileClient),
 	)
+
+	// The terminal tool is offered only when a client terminal runner is
+	// configured (e.g. an ACP client's integrated terminal); otherwise
+	// commands run through the local bash tool.
+	if tr := c.cfg.Overrides().TerminalRunner; tr != nil {
+		allTools = append(allTools, tools.NewTerminalTool(tr, c.permissions, c.cfg.WorkingDir()))
+	}
 
 	// Question tool is interactive-only and not available to sub-agents.
 	if !isSubAgent && c.interactive {
@@ -742,6 +757,7 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 		allTools = append(
 			allTools,
 			tools.NewDiagnosticsTool(c.lspManager),
+			tools.NewOutlineTool(c.lspManager),
 			tools.NewReferencesTool(c.lspManager),
 			tools.NewLSPRestartTool(c.lspManager),
 			tools.NewSymbolsTool(c.lspManager),
@@ -876,6 +892,13 @@ func (c *coordinator) buildAgentModels(ctx context.Context, isSubAgent bool) (Mo
 	if err != nil {
 		return Model{}, Model{}, err
 	}
+
+	// Bound each request with the configured timeout so unreachable or hung
+	// providers fail instead of blocking a session forever. The wrapper is
+	// applied per request, so retries get a fresh budget each attempt.
+	requestTimeout := c.cfg.Config().Options.GetRequestTimeout()
+	largeModel = newRequestTimeoutModel(largeModel, requestTimeout)
+	smallModel = newRequestTimeoutModel(smallModel, requestTimeout)
 
 	return Model{
 			Model:      largeModel,

@@ -186,7 +186,7 @@ func (p *Prompt) promptData(ctx context.Context, provider, model string, store *
 		for _, pth := range cfg.Options.SkillsPaths {
 			expandedPaths = append(expandedPaths, expandPath(pth, store))
 		}
-		for _, userSkill := range skills.Discover(expandedPaths) {
+		for _, userSkill := range skills.DiscoverCached(expandedPaths) {
 			if builtinNames[userSkill.Name] {
 				slog.Warn("User skill overrides builtin skill", "name", userSkill.Name)
 			}

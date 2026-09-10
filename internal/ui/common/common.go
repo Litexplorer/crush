@@ -3,6 +3,7 @@ package common
 import (
 	"fmt"
 	"image"
+	"log/slog"
 	"os"
 
 	tea "charm.land/bubbletea/v2"
@@ -31,15 +32,49 @@ func (c *Common) Config() *config.Config {
 	return c.Workspace.Config()
 }
 
-// DefaultCommon returns the default common UI configurations. When the
-// workspace has a large model selected, the theme is chosen based on its
-// provider; otherwise the default theme is used.
+// DefaultCommon returns the default common UI configurations.
+// If a custom theme file is configured via options.tui.theme_file, it
+// takes precedence over provider-based theme selection.
 func DefaultCommon(ws workspace.Workspace) *Common {
-	s := styles.ThemeForProvider(largeModelProviderID(ws))
+	s := LoadActiveTheme(ws)
 	return &Common{
 		Workspace: ws,
 		Styles:    &s,
 	}
+}
+
+/*
+"""
+ws: 工作区实例 (可为 nil)
+核心流程:
+1. 若 ws 为 nil，直接回退到默认 provider 主题
+2. 读取 cfg.Options.TUI.ThemeFile，若配置了主题文件则解析环境变量并读取
+3. 成功反序列化 JSON 主题后返回自定义 Styles
+4. 若读取或解析失败，打日志降级回退至根据 large model 的 provider 选取主题
+"""
+*/
+func LoadActiveTheme(ws workspace.Workspace) styles.Styles {
+	if ws == nil {
+		return styles.ThemeForProvider("")
+	}
+	cfg := ws.Config()
+	if cfg != nil && cfg.Options != nil && cfg.Options.TUI != nil &&
+		cfg.Options.TUI.ThemeFile != "" {
+		expanded := os.ExpandEnv(cfg.Options.TUI.ThemeFile)
+		data, err := os.ReadFile(expanded)
+		if err == nil {
+			s, err := styles.ThemeFromJSON(data)
+			if err == nil {
+				return s
+			}
+			slog.Warn("Failed to parse theme file, falling back to provider theme",
+				"file", expanded, "error", err)
+		} else {
+			slog.Warn("Failed to read theme file, falling back to provider theme",
+				"file", expanded, "error", err)
+		}
+	}
+	return styles.ThemeForProvider(largeModelProviderID(ws))
 }
 
 // largeModelProviderID returns the provider ID of the currently selected

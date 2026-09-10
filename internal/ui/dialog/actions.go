@@ -36,12 +36,25 @@ type ActionSelectSession struct {
 	Session session.Session
 }
 
+// ActionSelectSearchResult is a message indicating a search result has
+// been selected, carrying the matched session and message IDs.
+type ActionSelectSearchResult struct {
+	SessionID string
+	MessageID string
+}
+
 // ActionSelectModel is a message indicating a model has been selected.
 type ActionSelectModel struct {
 	Provider       catwalk.Provider
 	Model          config.SelectedModel
 	ModelType      config.SelectedModelType
 	ReAuthenticate bool
+}
+
+// ActionSelectQuestionIndex is a message indicating a question-index
+// item has been selected, carrying the target message ID to scroll to.
+type ActionSelectQuestionIndex struct {
+	MessageID string
 }
 
 // Messages for commands
@@ -58,6 +71,7 @@ type (
 		Style string
 	}
 	ActionToggleTransparentBackground struct{}
+	ActionToggleManualScroll          struct{}
 	ActionInitializeProject           struct{}
 	ActionSummarize                   struct {
 		SessionID string

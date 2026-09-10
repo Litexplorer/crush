@@ -241,6 +241,10 @@ type UI struct {
 	sendProgressBar    bool
 	progressBarEnabled bool
 
+	// pendingScrollToMessageID holds the message ID a message-search result
+	// or question-index jump should scroll to once the chat list is stable.
+	pendingScrollToMessageID string
+
 	// caps hold different terminal capabilities that we query for.
 	caps common.Capabilities
 
@@ -413,9 +417,32 @@ func New(com *common.Common, initialSessionID string, continueLast bool) *UI {
 	// use crush's clipboard backend and user feedback; disable the
 	// textarea's built-in copy binding.
 	ta.KeyMap.CopySelection = key.NewBinding()
+	// Add ctrl+left/right for word navigation (the textarea only binds
+	// alt+arrow by default).
+	ta.KeyMap.WordForward = key.NewBinding(
+		key.WithKeys("alt+right", "alt+f", "ctrl+right"),
+		key.WithHelp("alt+right/ctrl+right", "word forward"),
+	)
+	ta.KeyMap.WordBackward = key.NewBinding(
+		key.WithKeys("alt+left", "alt+b", "ctrl+left"),
+		key.WithHelp("alt+left/ctrl+left", "word backward"),
+	)
+	// Add ctrl+delete/backspace plus alt+backspace/ctrl+w for word deletion
+	// (the textarea only binds alt+delete/backspace by default).
+	ta.KeyMap.DeleteWordForward = key.NewBinding(
+		key.WithKeys("ctrl+delete"),
+		key.WithHelp("ctrl+delete", "delete word forward"),
+	)
+	ta.KeyMap.DeleteWordBackward = key.NewBinding(
+		key.WithKeys("alt+backspace", "ctrl+w", "ctrl+backspace"),
+		key.WithHelp("alt+backspace/ctrl+w", "delete word backward"),
+	)
 	ta.Focus()
 
 	ch := NewChat(com, com.Config().Options.TUI.Scrollbar)
+	if cfg := com.Config(); cfg.Options.TUI != nil && cfg.Options.TUI.ManualScroll != nil {
+		ch.SetManualScroll(*cfg.Options.TUI.ManualScroll)
+	}
 
 	keyMap := DefaultKeyMap()
 
@@ -785,6 +812,15 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if cmd := m.setSessionMessages(msgs); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
+		// A search-result jump scrolls to the hit message once the chat
+		// list is stable. Must run after setSessionMessages, which ends
+		// by selecting the last message.
+		if m.pendingScrollToMessageID != "" {
+			if cmd := m.chat.ScrollToMessage(m.pendingScrollToMessageID); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			m.pendingScrollToMessageID = ""
+		}
 		if cmd := m.restoreModelFromSession(msgs); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
@@ -923,6 +959,13 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.updateSessionMessage(msg.Payload))
 		case pubsub.DeletedEvent:
 			m.chat.RemoveMessage(msg.Payload.ID)
+			// A single message renders as multiple items (content,
+			// per-tool-call entries, and the end-of-turn info footer),
+			// so remove every item owned by the deleted message.
+			for _, tc := range msg.Payload.ToolCalls() {
+				m.chat.RemoveMessage(tc.ID)
+			}
+			m.chat.RemoveMessage(chat.AssistantInfoID(msg.Payload.ID))
 		}
 		// start the spinner if there is a new message
 		if hasInProgressTodo(m.session.Todos) && m.isAgentBusy() && !m.todoIsSpinning {
@@ -1679,6 +1722,10 @@ func (m *UI) handleClickFocus(msg tea.MouseClickMsg) (cmd tea.Cmd) {
 	switch {
 	case m.state != uiChat:
 		return nil
+	case m.header != nil && m.header.searchBtnWidth > 0 && msg.Button == uv.MouseLeft &&
+		image.Pt(msg.X, msg.Y).In(m.layout.header) &&
+		msg.X >= m.layout.header.Max.X-m.header.searchBtnWidth:
+		return m.openSearchDialog()
 	case m.focus != uiFocusSidebar && image.Pt(msg.X, msg.Y).In(m.layout.sidebar) && m.sidebarScrollable:
 		m.focus = uiFocusSidebar
 		m.textarea.Blur()
@@ -1911,6 +1958,20 @@ func (m *UI) handleDialogMsg(msg tea.Msg) tea.Cmd {
 		m.dialog.CloseDialog(dialog.SessionsID)
 		cmds = append(cmds, m.loadSession(msg.Session.ID))
 
+	// Question index dialog messages.
+	case dialog.ActionSelectQuestionIndex:
+		m.dialog.CloseDialog(dialog.QuestionIndexID)
+		if m.session == nil {
+			break
+		}
+		m.pendingScrollToMessageID = msg.MessageID
+		cmds = append(cmds, m.loadSession(m.session.ID))
+
+	// Search dialog messages.
+	case dialog.ActionSelectSearchResult:
+		m.dialog.CloseDialog(dialog.SearchID)
+		cmds = append(cmds, m.loadSession(msg.SessionID))
+
 	// Open dialog message.
 	case dialog.ActionOpenDialog:
 		m.dialog.CloseDialog(dialog.CommandsID)
@@ -2024,6 +2085,9 @@ func (m *UI) handleDialogMsg(msg tea.Msg) tea.Cmd {
 			}
 			return util.NewInfoMsg("Transparent background " + status)
 		})
+		m.dialog.CloseDialog(dialog.CommandsID)
+	case dialog.ActionToggleManualScroll:
+		cmds = append(cmds, m.toggleManualScroll())
 		m.dialog.CloseDialog(dialog.CommandsID)
 	case dialog.ActionQuit:
 		cmds = append(cmds, tea.Quit)
@@ -2333,7 +2397,7 @@ func (m *UI) handleSelectModel(msg dialog.ActionSelectModel) tea.Cmd {
 			// model's provider. Skipped when the provider resolves to
 			// the already-active theme, which avoids a full markdown
 			// re-render of the transcript on every selection.
-			m.applyThemeForProvider(providerID)
+			m.applyActiveTheme(providerID)
 		}
 		if _, ok := cfg.Models[config.SelectedModelTypeSmall]; !ok {
 			// Ensure small model is set is unset.
@@ -2435,6 +2499,11 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 				cmds = append(cmds, cmd)
 			}
 			return true
+		case key.Matches(msg, m.keyMap.Search):
+			if cmd := m.openSearchDialog(); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			return true
 		case key.Matches(msg, m.keyMap.Chat.Details) && m.isCompact:
 			m.detailsOpen = !m.detailsOpen
 			m.updateLayoutAndSize()
@@ -2474,6 +2543,30 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 			}
 			cmds = append(cmds, tea.Suspend)
 			return true
+		case key.Matches(msg, m.keyMap.SummarizeSession):
+			if m.state != uiChat || !m.hasSession() {
+				return false
+			}
+			if m.isAgentBusy() {
+				cmds = append(cmds, util.ReportWarn("Agent is busy, please wait before summarizing session..."))
+				return true
+			}
+			cmds = append(cmds, func() tea.Msg {
+				err := m.com.Workspace.AgentSummarize(context.Background(), m.session.ID)
+				if err != nil {
+					return util.ReportError(err)()
+				}
+				return nil
+			})
+			return true
+		case key.Matches(msg, m.keyMap.QuestionIndex):
+			if m.state != uiChat || !m.hasSession() {
+				return false
+			}
+			if cmd := m.openQuestionIndexDialog(); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			return true
 		case key.Matches(msg, m.keyMap.ToggleYolo):
 			yolo := m.toggleYoloMode()
 			status := "disabled"
@@ -2481,6 +2574,9 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 				status = "enabled"
 			}
 			cmds = append(cmds, util.ReportInfo("Yolo mode "+status))
+			return true
+		case key.Matches(msg, m.keyMap.ToggleManualScroll):
+			cmds = append(cmds, m.toggleManualScroll())
 			return true
 		}
 		return false
@@ -2827,6 +2923,19 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 				}
 			case key.Matches(msg, m.keyMap.Chat.Expand):
 				m.chat.ToggleExpandedSelectedItem()
+			case key.Matches(msg, m.keyMap.Chat.DeleteTurn):
+				if m.session == nil {
+					break
+				}
+				if m.isAgentBusy() {
+					cmds = append(cmds, util.ReportWarn("Agent is busy, please wait before deleting a turn..."))
+					break
+				}
+				if m.chat.SelectedMessageID() == "" {
+					cmds = append(cmds, util.ReportWarn("Select a message first to delete its turn"))
+					break
+				}
+				m.openDeleteTurnConfirm()
 			case key.Matches(msg, m.keyMap.Chat.Up):
 				if cmd := m.chat.ScrollByAndAnimate(-1); cmd != nil {
 					cmds = append(cmds, cmd)
@@ -3197,7 +3306,12 @@ func (m *UI) ShortHelp() []key.Binding {
 			tab,
 			commands,
 			k.Models,
+			k.Search,
 		)
+
+		if m.hasSession() {
+			binds = append(binds, k.SummarizeSession)
+		}
 
 		switch m.focus {
 		case uiFocusEditor:
@@ -3295,11 +3409,12 @@ func (m *UI) FullHelp() [][]key.Binding {
 			tab,
 			commands,
 			k.Models,
+			k.Search,
 			k.Sessions,
 			k.ToggleYolo,
 		)
 		if hasSession {
-			mainBinds = append(mainBinds, k.Chat.NewSession, k.Chat.EndFollow)
+			mainBinds = append(mainBinds, k.Chat.NewSession, k.Chat.EndFollow, k.SummarizeSession)
 		}
 
 		binds = append(binds, mainBinds)
@@ -3443,6 +3558,31 @@ func (m *UI) toggleCompactMode() tea.Cmd {
 	m.updateLayoutAndSize()
 
 	return nil
+}
+
+// toggleManualScroll flips the manual scroll setting, persists it, and updates
+// the chat view. Shared by the direct keybinding (ctrl+a) and the
+// commands-dialog action so both stay write-through.
+func (m *UI) toggleManualScroll() tea.Cmd {
+	return func() tea.Msg {
+		cfg := m.com.Config()
+		if cfg == nil {
+			return util.ReportError(errors.New("configuration not found"))()
+		}
+
+		isManualScroll := cfg.Options != nil && cfg.Options.TUI.ManualScroll != nil && *cfg.Options.TUI.ManualScroll
+		newValue := !isManualScroll
+		if err := m.com.Workspace.SetConfigField(config.ScopeGlobal, "options.tui.manual_scroll", newValue); err != nil {
+			return util.ReportError(err)()
+		}
+		m.chat.SetManualScroll(newValue)
+
+		status := "disabled"
+		if newValue {
+			status = "enabled"
+		}
+		return util.NewInfoMsg("Manual scroll " + status)
+	}
 }
 
 // updateLayoutAndSize updates the layout and sizes of UI components.
@@ -4143,6 +4283,19 @@ func (m *UI) applyThemeForProvider(providerID string) {
 	m.applyTheme(styles.ThemeForProvider(providerID))
 }
 
+// applyActiveTheme re-applies the theme for the given provider while honouring
+// a custom theme file (options.tui.theme_file). When no theme file is set this
+// is exactly [UI.applyThemeForProvider], which skips the re-render when the
+// resolved theme is already active.
+func (m *UI) applyActiveTheme(providerID string) {
+	cfg := m.com.Config()
+	if cfg != nil && cfg.Options != nil && cfg.Options.TUI != nil && cfg.Options.TUI.ThemeFile != "" {
+		m.applyTheme(common.LoadActiveTheme(m.com.Workspace))
+		return
+	}
+	m.applyThemeForProvider(providerID)
+}
+
 // applyTheme replaces the active styles with the given theme, drops the
 // shared markdown renderer cache, and refreshes every component that
 // caches style data.
@@ -4224,6 +4377,22 @@ func (m *UI) sendMessage(content string, attachments ...message.Attachment) tea.
 		m.setState(uiChat, m.focus)
 	}
 
+	// Reload config from disk so the new session picks up any
+	// external modifications to crush.json. Skip in local mode
+	// to avoid syncing model changes between TUI instances sharing
+	// the same working directory.
+	if v, _ := strconv.ParseBool(os.Getenv("CRUSH_CLIENT_SERVER")); v {
+		cmds = append(cmds, func() tea.Msg {
+			if err := m.com.Workspace.ReloadConfig(context.Background()); err != nil {
+				return util.InfoMsg{
+					Type: util.InfoTypeError,
+					Msg:  fmt.Sprintf("config reload failed: %v", err),
+				}
+			}
+			return nil
+		})
+	}
+
 	ctx := context.Background()
 	cmds = append(cmds, func() tea.Msg {
 		for _, path := range m.sessionFileReads {
@@ -4285,6 +4454,23 @@ func (m *UI) runShellCommandInternal(command string, isFirstMessage bool) tea.Cm
 			cmds = append(cmds, m.loadSession(newSession.ID))
 		}
 		m.setState(uiChat, m.focus)
+
+		// Reload config before shell execution to pick up any
+		// external modifications to crush.json. Skip in local
+		// mode to avoid syncing model changes between TUI
+		// instances sharing the same working directory.
+		if v, _ := strconv.ParseBool(os.Getenv("CRUSH_CLIENT_SERVER")); v {
+			cmds = append(cmds, func() tea.Msg {
+				if err := m.com.Workspace.ReloadConfig(context.Background()); err != nil {
+					return util.InfoMsg{
+						Type: util.InfoTypeError,
+						Msg:  fmt.Sprintf("config reload failed: %v", err),
+					}
+				}
+				return nil
+			})
+		}
+
 		// Defer shell execution until loadSessionMsg fires so the chat
 		// list is stable before we add items or start streaming.
 		m.pendingBangCommand = command
@@ -4423,6 +4609,10 @@ func (m *UI) openDialog(id string) tea.Cmd {
 		if cmd := m.openSessionsDialog(); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
+	case dialog.SearchID:
+		if cmd := m.openSearchDialog(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	case dialog.ModelsID:
 		if cmd := m.openModelsDialog(); cmd != nil {
 			cmds = append(cmds, cmd)
@@ -4443,6 +4633,10 @@ func (m *UI) openDialog(id string) tea.Cmd {
 		if cmd := m.openFilesDialog(); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
+	case dialog.QuestionIndexID:
+		if cmd := m.openQuestionIndexDialog(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	case dialog.QuitID:
 		if cmd := m.openQuitDialog(); cmd != nil {
 			cmds = append(cmds, cmd)
@@ -4452,6 +4646,18 @@ func (m *UI) openDialog(id string) tea.Cmd {
 		break
 	}
 	return tea.Batch(cmds...)
+}
+
+// openSearchDialog opens the message search dialog.
+func (m *UI) openSearchDialog() tea.Cmd {
+	if m.dialog.ContainsDialog(dialog.SearchID) {
+		m.dialog.BringToFront(dialog.SearchID)
+		return nil
+	}
+
+	searchDialog := dialog.NewSearch(m.com)
+	m.dialog.OpenDialog(searchDialog)
+	return nil
 }
 
 // openQuitDialog opens the quit confirmation dialog.
@@ -4580,6 +4786,24 @@ func (m *UI) openFilesDialog() tea.Cmd {
 	return cmd
 }
 
+// openQuestionIndexDialog opens the conversation question index dialog for
+// the current session. If it is already open, it brings it to the front.
+func (m *UI) openQuestionIndexDialog() tea.Cmd {
+	if m.dialog.ContainsDialog(dialog.QuestionIndexID) {
+		m.dialog.BringToFront(dialog.QuestionIndexID)
+		return nil
+	}
+	if m.session == nil {
+		return util.ReportWarn("No active session to list questions")
+	}
+	dlg, err := dialog.NewQuestionIndex(m.com, m.session.ID)
+	if err != nil {
+		return util.ReportError(err)
+	}
+	m.dialog.OpenDialog(dlg)
+	return nil
+}
+
 // openPermissionsDialog opens the permissions dialog for a permission request.
 func (m *UI) openPermissionsDialog(perm permission.PermissionRequest) tea.Cmd {
 	// Close any existing permissions dialog first.
@@ -4611,6 +4835,50 @@ func (m *UI) openBatchFormDialog(batch question.Request) {
 	form.OnCancel = func() {
 		m.com.Workspace.QuestionCancel()
 	}
+	m.activeInline = form
+	m.textarea.Blur()
+	m.focus = uiFocusEditor
+	m.activeInline.SetFocused(true)
+	m.updateLayoutAndSize()
+}
+
+// openDeleteTurnConfirm activates an inline yes/no form asking to confirm
+// deleting the turn anchored at the currently selected message. The form
+// uses the activeInline mechanism (like batch question forms), so its
+// height participates in the editor layout instead of overflowing it.
+// Confirming deletes the turn via the workspace; cancel just closes.
+func (m *UI) openDeleteTurnConfirm() {
+	anchorID := m.chat.SelectedMessageID()
+	if anchorID == "" || m.session == nil {
+		return
+	}
+	sessionID := m.session.ID
+
+	// Close any existing question form first to prevent stacking.
+	if qf, ok := m.activeInline.(*dialog.QuestionForm); ok && qf != nil {
+		m.activeInline = nil
+	}
+
+	batch := question.Request{
+		ID:        "delete_turn_confirm",
+		SessionID: sessionID,
+		Questions: []question.Question{
+			{
+				ID:   "confirm_delete_turn",
+				Type: question.TypeYesNo,
+				Text: "Delete this turn and all its messages?",
+			},
+		},
+	}
+
+	form := dialog.NewQuestionForm(m.com.Styles, batch)
+	form.OnAnswer = func(responses []question.Answer) {
+		if len(responses) > 0 && responses[0].Yes != nil && *responses[0].Yes {
+			m.com.Workspace.DeleteTurn(context.Background(), sessionID, anchorID)
+		}
+	}
+	form.OnCancel = func() {} // Not bound to the workspace question channel.
+
 	m.activeInline = form
 	m.textarea.Blur()
 	m.focus = uiFocusEditor

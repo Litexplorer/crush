@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -77,15 +78,17 @@ func TestNextRecentModels_TrimsToMax(t *testing.T) {
 	t.Parallel()
 
 	var seed []SelectedModel
-	for _, id := range []string{"m5", "m4", "m3", "m2", "m1"} {
-		seed = append(seed, SelectedModel{Provider: "p", Model: id})
+	for i := maxRecentModelsPerType; i >= 1; i-- {
+		seed = append(seed, SelectedModel{Provider: "p", Model: fmt.Sprintf("m%d", i)})
 	}
 	cfg := configWithRecents(seed...)
 
-	updated, changed := nextRecentModels(cfg, SelectedModelTypeLarge, SelectedModel{Provider: "p", Model: "m6"})
+	newest := SelectedModel{Provider: "p", Model: "m-new"}
+	updated, changed := nextRecentModels(cfg, SelectedModelTypeLarge, newest)
 	require.True(t, changed)
 	require.Len(t, updated, maxRecentModelsPerType)
-	require.Equal(t, SelectedModel{Provider: "p", Model: "m6"}, updated[0])
+	require.Equal(t, newest, updated[0])
+	// Adding one entry past the cap trims the oldest (m1), leaving m2 last.
 	require.Equal(t, SelectedModel{Provider: "p", Model: "m2"}, updated[maxRecentModelsPerType-1])
 }
 

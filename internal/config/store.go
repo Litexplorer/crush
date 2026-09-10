@@ -53,11 +53,40 @@ type fileSnapshot struct {
 	ModTime int64 // UnixNano
 }
 
+// FileClient, when set on the runtime overrides, routes file reads and
+// writes through an external client (e.g. an ACP client's editor
+// buffers) instead of the local file system. Tools prefer the client
+// and fall back to local IO when it is unavailable or returns an error.
+type FileClient interface {
+	// ReadTextFile reads a text file through the client. line/limit are
+	// 1-based line numbers; nil means "from the start" / "no limit".
+	ReadTextFile(ctx context.Context, sessionID, path string, line, limit *int) (string, error)
+	// WriteTextFile writes content to a path through the client.
+	WriteTextFile(ctx context.Context, sessionID, path, content string) error
+}
+
+// TerminalRunner, when set on the runtime overrides, lets the
+// `terminal` tool run commands in a client-provided terminal (e.g. an
+// ACP client's integrated terminal) instead of crush's local shell.
+// When nil the terminal tool is not offered and commands run through
+// the local bash tool.
+type TerminalRunner interface {
+	// RunTerminal runs a command in a client terminal and returns its
+	// final output and exit code.
+	RunTerminal(ctx context.Context, sessionID, command string, args []string, cwd string) (output string, exitCode int, err error)
+}
+
 // RuntimeOverrides holds per-session settings that are never persisted to
 // disk. They are applied on top of the loaded Config and survive only for
 // the lifetime of the process (or workspace).
 type RuntimeOverrides struct {
 	SkipPermissionRequests bool
+	// FileClient routes file reads and writes through an external client
+	// when set (see FileClient); nil means local file system only.
+	FileClient FileClient
+	// TerminalRunner routes terminal commands to a client terminal when
+	// set (see TerminalRunner); nil means local shell only.
+	TerminalRunner TerminalRunner
 	// EnabledChannels lists the MCP servers opted in as channels for this
 	// session (via the --channels flag). A server present in MCP config only
 	// pushes channel events when it also appears here. Entries may be written
@@ -457,7 +486,9 @@ func (s *ConfigStore) updateLocked(scope Scope, mutate func(*Config) map[string]
 // OverridePreferredModel sets the preferred model for the given type in
 // memory only, without persisting. It is for per-run overrides (such as the
 // non-interactive --model flags) that must not be written to the user's
-// config file.
+// config file. The recent-models list is updated in memory too, so the
+// model picker's "Recently used" section stays consistent with the active
+// model even when nothing is written to disk.
 func (s *ConfigStore) OverridePreferredModel(modelType SelectedModelType, model SelectedModel) {
 	s.mutateInMemory(func(c *Config) {
 		if c.Models == nil {
@@ -465,6 +496,12 @@ func (s *ConfigStore) OverridePreferredModel(modelType SelectedModelType, model 
 		}
 		c.Models[modelType] = model
 		s.pinPreferredModelLocked(modelType, model)
+		if updated, changed := nextRecentModels(c, modelType, model); changed {
+			if c.RecentModels == nil {
+				c.RecentModels = make(map[SelectedModelType][]SelectedModel)
+			}
+			c.RecentModels[modelType] = updated
+		}
 	})
 }
 
@@ -557,6 +594,14 @@ func (s *ConfigStore) SetTransparentBackground(scope Scope, enabled bool) error 
 	return s.update(scope, func(c *Config) map[string]any {
 		c.ensureTUI().Transparent = &enabled
 		return map[string]any{"options.tui.transparent": enabled}
+	})
+}
+
+// SetManualScroll sets the manual scroll setting and persists it.
+func (s *ConfigStore) SetManualScroll(scope Scope, enabled bool) error {
+	return s.update(scope, func(c *Config) map[string]any {
+		c.ensureTUI().ManualScroll = &enabled
+		return map[string]any{"options.tui.manual_scroll": enabled}
 	})
 }
 

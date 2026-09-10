@@ -1,0 +1,1 @@
+Get a structured outline of symbols in a file via LSP. Returns each symbol's kind, name, start line, and end line so you can read only the relevant section with `view offset=X limit=Y`. Use this before `view` to avoid reading entire files.

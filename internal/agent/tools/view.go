@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"charm.land/fantasy"
+	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/filepathext"
 	"github.com/charmbracelet/crush/internal/filetracker"
 	"github.com/charmbracelet/crush/internal/lsp"
@@ -47,7 +48,7 @@ func viewDescription() string {
 type ViewParams struct {
 	FilePath string `json:"file_path" description:"The path to the file to read"`
 	Offset   int    `json:"offset,omitempty" description:"The line number to start reading from (0-based)"`
-	Limit    int    `json:"limit,omitempty" description:"The number of lines to read (defaults to 200)"`
+	Limit    int    `json:"limit,omitempty" description:"The number of lines to read (defaults to 60)"`
 }
 
 type ViewPermissionsParams struct {
@@ -74,7 +75,8 @@ type ViewResponseMetadata struct {
 const (
 	ViewToolName     = "view"
 	MaxViewSize      = 200 * 1024 // 200KB
-	DefaultReadLimit = 200
+	DefaultReadLimit = 60
+	OutlineThreshold = 80
 	MaxLineLength    = 2000
 )
 
@@ -93,6 +95,7 @@ func NewViewTool(
 	filetracker filetracker.Service,
 	skillTracker *skills.Tracker,
 	workingDir string,
+	fileClient config.FileClient,
 	skillsPaths ...string,
 ) fantasy.AgentTool {
 	return fantasy.NewAgentTool(
@@ -151,6 +154,32 @@ func NewViewTool(
 				}
 				if !granted {
 					return NewPermissionDeniedResponse(), nil
+				}
+			}
+
+			// Prefer a client-attached file system for reads (US-014): the
+			// client's view may include unsaved buffers. Any client error
+			// falls back to the local file system below.
+			if fileClient != nil {
+				line := params.Offset + 1
+				limit := params.Limit
+				if limit <= 0 {
+					if isSkillFile {
+						limit = 1000000 // Effectively no limit for skill files
+					} else {
+						limit = DefaultReadLimit
+					}
+				}
+				if content, clientErr := fileClient.ReadTextFile(ctx, sessionID, absFilePath, &line, &limit); clientErr == nil {
+					if !utf8.ValidString(content) {
+						return fantasy.NewTextErrorResponse("File content is not valid UTF-8"), nil
+					}
+					output := "<file>\n" + addLineNumbers(content, params.Offset+1) + "\n</file>\n"
+					filetracker.RecordRead(ctx, sessionID, filePath)
+					return fantasy.WithResponseMetadata(
+						fantasy.NewTextResponse(output),
+						ViewResponseMetadata{FilePath: filePath, Content: content},
+					), nil
 				}
 			}
 
@@ -247,7 +276,21 @@ func NewViewTool(
 
 			openInLSPs(ctx, lspManager, filePath)
 			waitForLSPDiagnostics(ctx, lspManager, filePath, 300*time.Millisecond)
-			output := "<file>\n"
+
+			outline := ""
+			// codegraph := ""
+			if params.Offset <= 0 {
+				outline = getOutline(ctx, lspManager, filePath)
+				// codegraph = getCodegraphImpact(ctx, lspManager, filePath)
+			}
+			output := ""
+			if outline != "" {
+				output += outline + "\n"
+			}
+			// if codegraph != "" {
+			// 	output += codegraph + "\n"
+			// }
+			output += "<file>\n"
 			output += addLineNumbers(content, params.Offset+1)
 
 			if hasMore {
@@ -361,6 +404,21 @@ func readTextFile(filePath string, offset, limit, maxContentSize int) (string, b
 	}
 
 	return strings.Join(lines, "\n"), hasMore, nil
+}
+
+func countFileLines(filePath string) (int, error) {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	count := 0
+	for scanner.Scan() {
+		count++
+	}
+	return count, scanner.Err()
 }
 
 func getImageMimeType(filePath string) (bool, string) {

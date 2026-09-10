@@ -642,7 +642,13 @@ func (l *List) PrependItems(items ...Item) {
 func (l *List) SetItems(items ...Item) {
 	l.items = items
 	l.selectedIdx = min(l.selectedIdx, len(l.items)-1)
-	l.offsetIdx = min(l.offsetIdx, len(l.items)-1)
+	// Floor the offset at zero: min() alone keeps a negative offset, which
+	// an earlier SetItems on an empty list produces (min(0, -1) == -1) and
+	// which later calls only ever preserve (min(-1, n-1) == -1). Render
+	// stops at the first item when the index is negative, so a poisoned
+	// offset leaves the list permanently blank until something calls
+	// ScrollToTop.
+	l.offsetIdx = max(0, min(l.offsetIdx, len(l.items)-1))
 	l.offsetLine = 0
 	l.retainCacheFor(items)
 	l.totalHeightValid = false
@@ -672,7 +678,10 @@ func (l *List) RemoveItem(idx int) {
 
 	// Adjust selection if needed
 	if l.selectedIdx == idx {
-		l.selectedIdx = -1
+		// The selected item was removed. Keep the selection on the item
+		// that slid into its slot (the next item), or clamp to the new
+		// last item when the removed item was the last one.
+		l.selectedIdx = min(idx, len(l.items)-1)
 	} else if l.selectedIdx > idx {
 		l.selectedIdx--
 	}
@@ -680,8 +689,14 @@ func (l *List) RemoveItem(idx int) {
 	// Adjust offset if needed
 	if l.offsetIdx > idx {
 		l.offsetIdx--
-	} else if l.offsetIdx == idx && l.offsetIdx >= len(l.items) {
-		l.offsetIdx = max(0, len(l.items)-1)
+	} else if l.offsetIdx == idx {
+		// The first visible item was removed. The next item slides into
+		// the top of the viewport and must start at line 0 — the stale
+		// offsetLine belonged to the removed item, so without resetting
+		// it the viewport content appears shifted up by that many lines.
+		if l.offsetIdx >= len(l.items) {
+			l.offsetIdx = max(0, len(l.items)-1)
+		}
 		l.offsetLine = 0
 	}
 	l.totalHeightValid = false

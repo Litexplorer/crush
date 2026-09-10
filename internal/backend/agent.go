@@ -37,10 +37,22 @@ func (b *Backend) SendMessage(workspaceID string, msg proto.AgentMessage) error 
 		return ErrAgentNotInitialized
 	}
 
+	// Resolve `@`-mention file references: the browser only sends a
+	// file_path, so read the content server-side so the agent can consume it.
+	// Only touch WorkingDir when there are attachments (a nil Cfg in tests
+	// must not panic on the empty case).
+	attachments := msg.Attachments
+	if len(msg.Attachments) > 0 {
+		var err error
+		if attachments, err = resolveAttachments(ws.Cfg.WorkingDir(), msg.Attachments); err != nil {
+			return err
+		}
+	}
+
 	if err := agent.ValidateCall(agent.SessionAgentCall{
 		SessionID:   msg.SessionID,
 		Prompt:      msg.Prompt,
-		Attachments: proto.AttachmentsToMessage(msg.Attachments),
+		Attachments: proto.AttachmentsToMessage(attachments),
 	}); err != nil {
 		return err
 	}

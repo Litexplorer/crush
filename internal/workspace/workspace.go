@@ -134,6 +134,12 @@ type Workspace interface {
 	ListMessages(ctx context.Context, sessionID string) ([]message.Message, error)
 	ListUserMessages(ctx context.Context, sessionID string) ([]message.Message, error)
 	ListAllUserMessages(ctx context.Context) ([]message.Message, error)
+	SearchMessages(ctx context.Context, query string, limit int) ([]message.SearchResult, error)
+
+	// DeleteTurn deletes the complete user turn containing
+	// anchorMessageID and returns the deleted messages in chronological
+	// order.
+	DeleteTurn(ctx context.Context, sessionID string, anchorMessageID string) ([]message.Message, error)
 
 	// Agent
 	AgentRun(ctx context.Context, sessionID, prompt string, attachments ...message.Attachment) error
@@ -200,6 +206,11 @@ type Workspace interface {
 	Config() *config.Config
 	WorkingDir() string
 	Resolver() config.VariableResolver
+
+	// ReloadConfig reloads the configuration from disk, picking up
+	// external modifications to crush.json. Called before a new
+	// session runs so the latest config is always used.
+	ReloadConfig(ctx context.Context) error
 
 	// Config mutations (proxied to server in client mode)
 	UpdatePreferredModel(scope config.Scope, modelType config.SelectedModelType, model config.SelectedModel) error

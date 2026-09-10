@@ -101,6 +101,19 @@ func (w *AppWorkspace) ListAllUserMessages(ctx context.Context) ([]message.Messa
 	return w.app.Messages.ListAllUserMessages(ctx)
 }
 
+func (w *AppWorkspace) SearchMessages(ctx context.Context, query string, limit int) ([]message.SearchResult, error) {
+	return w.app.Messages.SearchMessages(ctx, query, limit)
+}
+
+func (w *AppWorkspace) DeleteTurn(ctx context.Context, sessionID string, anchorMessageID string) ([]message.Message, error) {
+	// Drain any debounced updates so the deletion observes the latest
+	// in-memory state before resolving the turn boundary.
+	if err := w.app.Messages.FlushAll(ctx); err != nil {
+		return nil, err
+	}
+	return w.app.Messages.DeleteTurn(ctx, sessionID, anchorMessageID)
+}
+
 // -- Agent --
 
 func (w *AppWorkspace) AgentRun(ctx context.Context, sessionID, prompt string, attachments ...message.Attachment) error {
@@ -339,6 +352,12 @@ func (w *AppWorkspace) WorkingDir() string {
 
 func (w *AppWorkspace) Resolver() config.VariableResolver {
 	return w.store.Resolver()
+}
+
+// ReloadConfig reloads the config from disk, picking up external
+// modifications to crush.json.
+func (w *AppWorkspace) ReloadConfig(ctx context.Context) error {
+	return w.store.ReloadFromDisk(ctx)
 }
 
 // -- Config mutations --

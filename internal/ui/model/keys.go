@@ -62,6 +62,7 @@ type KeyMap struct {
 		Copy           key.Binding
 		ClearHighlight key.Binding
 		Expand         key.Binding
+		DeleteTurn     key.Binding
 		ScrollLeft     key.Binding
 		ScrollRight    key.Binding
 		FocusSidebar   key.Binding
@@ -76,14 +77,21 @@ type KeyMap struct {
 	}
 
 	// Global key maps
-	Quit       key.Binding
-	Help       key.Binding
-	Commands   key.Binding
-	Models     key.Binding
-	Suspend    key.Binding
-	Sessions   key.Binding
-	Tab        key.Binding
-	ToggleYolo key.Binding
+	Quit             key.Binding
+	Help             key.Binding
+	Commands         key.Binding
+	Models           key.Binding
+	Suspend          key.Binding
+	Sessions         key.Binding
+	Search           key.Binding
+	SummarizeSession key.Binding
+	QuestionIndex    key.Binding
+	Tab              key.Binding
+	ToggleYolo       key.Binding
+	// ToggleManualScroll toggles manual scroll mode. It is intentionally not
+	// exposed in the bottom help bar (no WithHelp); the shortcut is shown in
+	// the commands palette instead.
+	ToggleManualScroll key.Binding
 }
 
 func DefaultKeyMap() KeyMap {
@@ -112,6 +120,18 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("ctrl+s"),
 			key.WithHelp("ctrl+s", "sessions"),
 		),
+		Search: key.NewBinding(
+			key.WithKeys("ctrl+k", "ctrl+/"),
+			key.WithHelp("ctrl+k", "search"),
+		),
+		SummarizeSession: key.NewBinding(
+			key.WithKeys("ctrl+u"),
+			key.WithHelp("ctrl+u", "summarize session"),
+		),
+		QuestionIndex: key.NewBinding(
+			key.WithKeys("ctrl+q"),
+			key.WithHelp("ctrl+q", "questions"),
+		),
 		Tab: key.NewBinding(
 			key.WithKeys("tab"),
 			key.WithHelp("tab", "change focus"),
@@ -119,6 +139,9 @@ func DefaultKeyMap() KeyMap {
 		ToggleYolo: key.NewBinding(
 			key.WithKeys("ctrl+y"),
 			key.WithHelp("ctrl+y", "toggle yolo"),
+		),
+		ToggleManualScroll: key.NewBinding(
+			key.WithKeys("ctrl+a"),
 		),
 	}
 
@@ -283,6 +306,10 @@ func DefaultKeyMap() KeyMap {
 	km.Chat.Expand = key.NewBinding(
 		key.WithKeys("space"),
 		key.WithHelp("space", "expand/collapse"),
+	)
+	km.Chat.DeleteTurn = key.NewBinding(
+		key.WithKeys("ctrl+x"),
+		key.WithHelp("ctrl+x", "delete turn"),
 	)
 	km.Chat.ScrollLeft = key.NewBinding(
 		key.WithKeys("shift+left", "H"),

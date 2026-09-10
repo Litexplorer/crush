@@ -223,6 +223,18 @@ func (w *ClientWorkspace) ListAllUserMessages(ctx context.Context) ([]message.Me
 	return protoToMessages(msgs), nil
 }
 
+// SearchMessages is not supported in client/server mode yet; it exists to
+// satisfy the Workspace interface.
+func (w *ClientWorkspace) SearchMessages(ctx context.Context, query string, limit int) ([]message.SearchResult, error) {
+	return nil, errors.New("SearchMessages is not supported in client/server mode")
+}
+
+// DeleteTurn is not supported in client/server mode yet; it exists to
+// satisfy the Workspace interface.
+func (w *ClientWorkspace) DeleteTurn(ctx context.Context, sessionID string, anchorMessageID string) ([]message.Message, error) {
+	return nil, errors.New("DeleteTurn is not supported in client/server mode")
+}
+
 // -- Agent --
 
 func (w *ClientWorkspace) AgentRun(ctx context.Context, sessionID, prompt string, attachments ...message.Attachment) error {
@@ -526,6 +538,13 @@ func (w *ClientWorkspace) WorkingDir() string {
 
 func (w *ClientWorkspace) Resolver() config.VariableResolver {
 	return config.IdentityResolver()
+}
+
+// ReloadConfig refreshes the cached workspace in client/server mode; the
+// authoritative config lives on the server.
+func (w *ClientWorkspace) ReloadConfig(ctx context.Context) error {
+	w.refreshWorkspace()
+	return nil
 }
 
 // -- Config mutations --

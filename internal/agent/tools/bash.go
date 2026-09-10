@@ -72,78 +72,11 @@ type bashDescriptionData struct {
 	GhAvailable     bool
 }
 
-var bannedCommands = []string{
-	// Network/Download tools
-	"alias",
-	"aria2c",
-	"axel",
-	"chrome",
-	"curl",
-	"curlie",
-	"firefox",
-	"http-prompt",
-	"httpie",
-	"links",
-	"lynx",
-	"nc",
-	"safari",
-	"scp",
-	"ssh",
-	"telnet",
-	"w3m",
-	"wget",
-	"xh",
-
-	// System administration
-	"doas",
-	"su",
-	"sudo",
-
-	// Package managers
-	"apk",
-	"apt",
-	"apt-cache",
-	"apt-get",
-	"dnf",
-	"dpkg",
-	"emerge",
-	"home-manager",
-	"makepkg",
-	"opkg",
-	"pacman",
-	"paru",
-	"pkg",
-	"pkg_add",
-	"pkg_delete",
-	"portage",
-	"rpm",
-	"yay",
-	"yum",
-	"zypper",
-
-	// System modification
-	"at",
-	"batch",
-	"chkconfig",
-	"crontab",
-	"fdisk",
-	"mkfs",
-	"mount",
-	"parted",
-	"service",
-	"systemctl",
-	"umount",
-
-	// Network configuration
-	"firewall-cmd",
-	"ifconfig",
-	"ip",
-	"iptables",
-	"netstat",
-	"pfctl",
-	"route",
-	"ufw",
-}
+// bannedCommands lists commands the bash tool refuses to run. It is
+// intentionally empty so the agent can run any command, including network
+// tools, package managers, and system administration utilities. Per-command
+// argument guards, if any, live in blockFuncs below.
+var bannedCommands = []string{}
 
 func bashDescription(attribution *config.Attribution, modelID string) string {
 	bannedCommandsStr := strings.Join(bannedCommands, ", ")
@@ -164,7 +97,8 @@ func bashDescription(attribution *config.Attribution, modelID string) string {
 
 func blockFuncs() []shell.BlockFunc {
 	return []shell.BlockFunc{
-		shell.CommandsBlocker(bannedCommands),
+		// CommandsBlocker is intentionally omitted: bannedCommands is empty,
+		// so the bash tool performs no global command allowlist check.
 
 		// System package managers
 		shell.ArgumentsBlocker("apk", []string{"add"}, nil),

@@ -8,6 +8,12 @@ import (
 	"database/sql"
 )
 
+type AcpSession struct {
+	SessionID string `json:"session_id"`
+	Cwd       string `json:"cwd"`
+	UpdatedAt int64  `json:"updated_at"`
+}
+
 type File struct {
 	ID        string `json:"id"`
 	SessionID string `json:"session_id"`
@@ -29,6 +35,10 @@ type Message struct {
 	FinishedAt       sql.NullInt64  `json:"finished_at"`
 	Provider         sql.NullString `json:"provider"`
 	IsSummaryMessage int64          `json:"is_summary_message"`
+}
+
+type MessagesFt struct {
+	Parts string `json:"parts"`
 }
 
 type ReadFile struct {

@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"iter"
 	"maps"
 	"slices"
 	"strings"
@@ -15,6 +16,35 @@ import (
 	"github.com/charmbracelet/crush/internal/workspace"
 	"github.com/charmbracelet/x/powernap/pkg/lsp/protocol"
 )
+
+// isActiveLSPState reports whether a state represents an active LSP server.
+func isActiveLSPState(s lsp.ServerState) bool {
+	return s == lsp.StateReady || s == lsp.StateStarting
+}
+
+// sortLSPs orders LSP clients primarily by activation state (active servers
+// first) and then alphabetically by name within each group. Active means the
+// server is Ready or Starting; every inactive state (Error, Stopped,
+// Unstarted, Disabled) counts equally as "not active" and sorts after.
+func sortLSPs(in iter.Seq[workspace.LSPClientInfo]) []workspace.LSPClientInfo {
+	return slices.SortedFunc(in, func(a, b workspace.LSPClientInfo) int {
+		activeA := isActiveLSPState(a.State)
+		activeB := isActiveLSPState(b.State)
+		if activeA != activeB {
+			if activeA {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(a.Name, b.Name)
+	})
+}
+
+// LSPInfo wraps LSP client information with diagnostic counts by severity.
+type LSPInfo struct {
+	workspace.LSPClientInfo
+	Diagnostics map[protocol.DiagnosticSeverity]int
+}
 
 // lspStatesTTL bounds how long the memoized LSP state may go without a
 // re-probe being scheduled; LSP events normally refresh it much sooner. The
@@ -30,12 +60,6 @@ var lspStatesTTL = 5 * time.Second
 type lspStatesMsg struct {
 	states      map[string]workspace.LSPClientInfo
 	diagnostics map[string]lsp.DiagnosticCounts
-}
-
-// LSPInfo wraps LSP client information with diagnostic counts by severity.
-type LSPInfo struct {
-	workspace.LSPClientInfo
-	Diagnostics map[protocol.DiagnosticSeverity]int
 }
 
 // requestLSPRefresh schedules an off-thread refresh of the memoized LSP
@@ -105,9 +129,7 @@ func (m *UI) lspErrorCount() int {
 func (m *UI) lspInfo(width, maxItems int, isSection bool) string {
 	t := m.com.Styles
 
-	states := slices.SortedFunc(maps.Values(m.lspStates), func(a, b workspace.LSPClientInfo) int {
-		return strings.Compare(a.Name, b.Name)
-	})
+	states := sortLSPs(maps.Values(m.lspStates))
 
 	var lsps []LSPInfo
 	for _, state := range states {

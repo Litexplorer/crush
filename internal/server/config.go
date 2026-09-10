@@ -286,6 +286,29 @@ func (c *controllerV1) handleGetWorkspaceSkills(w http.ResponseWriter, r *http.R
 	jsonEncode(w, skills)
 }
 
+// handleGetWorkspaceFiles lists files and directories under the workspace
+// working directory, powering the `@` mention file picker (US-31).
+//
+//	@Summary		List workspace files
+//	@Tags			workspace
+//	@Produce		json
+//	@Param			id		path	string	true	"Workspace ID"
+//	@Param			path	query	string	false	"Relative directory (default root)"
+//	@Success		200		{array}		proto.FileEntry
+//	@Failure		404		{object}	proto.Error
+//	@Failure		500		{object}	proto.Error
+//	@Router			/workspaces/{id}/files [get]
+func (c *controllerV1) handleGetWorkspaceFiles(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	dir := r.URL.Query().Get("path")
+	entries, err := c.backend.ListWorkspaceFiles(id, dir)
+	if err != nil {
+		c.handleError(w, r, err)
+		return
+	}
+	jsonEncode(w, entries)
+}
+
 // handlePostWorkspaceSkillRead reads a skill's content by ID.
 //
 //	@Summary		Read skill content

@@ -455,7 +455,9 @@ func (c *Commands) defaultCommands() []*CommandItem {
 
 	// Only show compact command if there's an active session
 	if c.hasSession {
-		commands = append(commands, NewCommandItem(c.com.Styles, "summarize", "Summarize Session", "", ActionSummarize{SessionID: c.sessionID}))
+		commands = append(commands, NewCommandItem(c.com.Styles, "summarize", "Summarize Session", "ctrl+u", ActionSummarize{SessionID: c.sessionID}))
+		commands = append(commands, NewCommandItem(c.com.Styles, "question_index", "会话问题列表", "ctrl+q", ActionOpenDialog{QuestionIndexID}).
+			WithDescription("列出本会话全部问题，选中可跳转定位"))
 	}
 
 	// Add reasoning toggle for models that support it
@@ -547,6 +549,13 @@ func (c *Commands) defaultCommands() []*CommandItem {
 		transparentLabel = "Enable Background Color"
 	}
 	commands = append(commands, NewCommandItem(c.com.Styles, "toggle_transparent", transparentLabel, "", ActionToggleTransparentBackground{}))
+
+	// Add manual scroll toggle.
+	manualScrollLabel := "Enable Manual Scroll"
+	if cfg != nil && cfg.Options != nil && cfg.Options.TUI.ManualScroll != nil && *cfg.Options.TUI.ManualScroll {
+		manualScrollLabel = "Disable Manual Scroll"
+	}
+	commands = append(commands, NewCommandItem(c.com.Styles, "toggle_manual_scroll", manualScrollLabel, "ctrl+a", ActionToggleManualScroll{}))
 
 	commands = append(
 		commands,

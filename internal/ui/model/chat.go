@@ -118,6 +118,11 @@ type Chat struct {
 	// bottom on new messages.
 	follow bool
 
+	// manualScroll disables automatic scroll-to-bottom on new messages.
+	// When enabled, the view stays put as content streams and only moves
+	// when the user scrolls manually.
+	manualScroll bool
+
 	// drawCache memoizes the decoded form of the last list.Render output so
 	// repeat frames with byte-identical content skip the per-cell ANSI
 	// reparse that uv.StyledString.Draw performs every call. See F9
@@ -230,8 +235,10 @@ func (m *Chat) Draw(scr uv.Screen, area uv.Rectangle) {
 	rendered := m.list.Render()
 	// If we're in follow mode but the render revealed we're no longer at
 	// the bottom (e.g. streaming content grew an item), re-anchor and
-	// re-render so the view stays pinned to the end.
-	if m.follow && !m.list.AtBottom() {
+	// re-render so the view stays pinned to the end. Manual scroll mode
+	// suppresses this re-anchoring: the view only moves when the user
+	// scrolls manually.
+	if m.follow && !m.manualScroll && !m.list.AtBottom() {
 		m.list.ScrollToBottom()
 		rendered = m.list.Render()
 	}
@@ -408,11 +415,11 @@ func (m *Chat) SetMessages(msgs ...chat.MessageItem) tea.Cmd {
 
 	items := make([]list.Item, len(msgs))
 	for i, msg := range msgs {
-		m.idInxMap[msg.ID()] = i
+		registerID(msg, i, m.idInxMap)
 		// Register nested tool IDs for tools that contain nested tools.
 		if container, ok := msg.(chat.NestedToolContainer); ok {
 			for _, nested := range container.NestedTools() {
-				m.idInxMap[nested.ID()] = i
+				registerID(nested, i, m.idInxMap)
 			}
 		}
 		items[i] = msg
@@ -422,16 +429,31 @@ func (m *Chat) SetMessages(msgs ...chat.MessageItem) tea.Cmd {
 	return nil
 }
 
+// registerID indexes an item under its own ID and, for items that carry a
+// containing message ID (tool items), under that message ID as well. The
+// message-ID alias lets search-result jumps scroll to messages that render
+// only as tool items, whose own IDs are the tool call IDs.
+func registerID(item list.Item, index int, idInxMap map[string]int) {
+	if identifiable, ok := item.(interface{ ID() string }); ok {
+		idInxMap[identifiable.ID()] = index
+	}
+	if mid, ok := item.(interface{ MessageID() string }); ok {
+		if messageID := mid.MessageID(); messageID != "" {
+			idInxMap[messageID] = index
+		}
+	}
+}
+
 // AppendMessages appends a new message item to the chat list.
 func (m *Chat) AppendMessages(msgs ...chat.MessageItem) {
 	items := make([]list.Item, len(msgs))
 	indexOffset := m.list.Len()
 	for i, msg := range msgs {
-		m.idInxMap[msg.ID()] = indexOffset + i
+		registerID(msg, indexOffset+i, m.idInxMap)
 		// Register nested tool IDs for tools that contain nested tools.
 		if container, ok := msg.(chat.NestedToolContainer); ok {
 			for _, nested := range container.NestedTools() {
-				m.idInxMap[nested.ID()] = indexOffset + i
+				registerID(nested, indexOffset+i, m.idInxMap)
 			}
 		}
 		items[i] = msg
@@ -544,9 +566,16 @@ func (m *Chat) AtBottom() bool {
 }
 
 // Follow returns whether the chat view is in follow mode (auto-scroll to
-// bottom on new messages).
+// bottom on new messages). Manual scroll mode suppresses follow.
 func (m *Chat) Follow() bool {
-	return m.follow
+	return m.follow && !m.manualScroll
+}
+
+// SetManualScroll enables or disables manual scroll mode. When enabled, the
+// view no longer auto-scrolls to bottom on new messages; the user must scroll
+// manually.
+func (m *Chat) SetManualScroll(enabled bool) {
+	m.manualScroll = enabled
 }
 
 // ScrollToBottom scrolls the chat view to the bottom.
@@ -587,6 +616,21 @@ func (m *Chat) ScrollToSelected() tea.Cmd {
 // ScrollToIndex scrolls the chat view to the item at the given index.
 func (m *Chat) ScrollToIndex(index int) tea.Cmd {
 	m.list.ScrollToIndex(index)
+	m.follow = m.AtBottom() // Disable follow mode if user scrolls up
+	return m.showScrollbar()
+}
+
+// ScrollToMessage scrolls the chat view to the message with the given ID,
+// selecting it when the item is selectable.
+func (m *Chat) ScrollToMessage(id string) tea.Cmd {
+	idx, ok := m.idInxMap[id]
+	if !ok {
+		return nil
+	}
+	if m.isSelectable(idx) {
+		m.list.SetSelected(idx)
+	}
+	m.list.ScrollToIndex(idx)
 	m.follow = m.AtBottom() // Disable follow mode if user scrolls up
 	return m.showScrollbar()
 }
@@ -777,28 +821,46 @@ func (m *Chat) ClearMessages() {
 	m.ClearMouse()
 }
 
-// RemoveMessage removes a message from the chat list by its ID.
+// RemoveMessage removes every item owned by the message with the given
+// ID. A single message renders as multiple items (content, per-tool-call
+// entries, and the end-of-turn info footer) that all alias the same
+// message ID, so we scan the list instead of trusting the idInxMap: the
+// map can only hold one index per key and the last registration (the
+// info footer) wins, which would leave the earlier items orphaned.
 func (m *Chat) RemoveMessage(id string) {
-	idx, ok := m.idInxMap[id]
-	if !ok {
-		return
-	}
-
-	// Remove from list
-	m.list.RemoveItem(idx)
-
-	// Remove from index map
-	delete(m.idInxMap, id)
-
-	// Rebuild index map for all items after the removed one
-	for i := idx; i < m.list.Len(); i++ {
-		if item, ok := m.list.ItemAt(i).(chat.MessageItem); ok {
-			m.idInxMap[item.ID()] = i
+	// Collect matching indices scanning from the end so removals do not
+	// shift indices that have not been visited yet.
+	var idxs []int
+	for i := m.list.Len() - 1; i >= 0; i-- {
+		item := m.list.ItemAt(i)
+		if identifiable, ok := item.(interface{ ID() string }); ok && identifiable.ID() == id {
+			idxs = append(idxs, i)
+			continue
+		}
+		if mid, ok := item.(interface{ MessageID() string }); ok && mid.MessageID() == id {
+			idxs = append(idxs, i)
 		}
 	}
+	if len(idxs) == 0 {
+		return
+	}
+	for _, idx := range idxs {
+		m.list.RemoveItem(idx)
+		delete(m.pausedAnimations, id)
+	}
 
-	// Clean up any paused animations for this message
-	delete(m.pausedAnimations, id)
+	// Rebuild the index map from scratch: positions and aliases shift
+	// whenever an item above them is removed.
+	m.idInxMap = make(map[string]int)
+	for i := 0; i < m.list.Len(); i++ {
+		item := m.list.ItemAt(i)
+		registerID(item, i, m.idInxMap)
+		if container, ok := item.(chat.NestedToolContainer); ok {
+			for _, nested := range container.NestedTools() {
+				registerID(nested, i, m.idInxMap)
+			}
+		}
+	}
 }
 
 // MessageItem returns the message item with the given ID, or nil if not found.
@@ -812,6 +874,17 @@ func (m *Chat) MessageItem(id string) chat.MessageItem {
 		return nil
 	}
 	return item
+}
+
+// SelectedMessageID returns the ID of the message that owns the
+// currently selected item, or "" when the selection cannot be mapped
+// to a persisted message.
+func (m *Chat) SelectedMessageID() string {
+	item := m.list.SelectedItem()
+	if p, ok := item.(chat.MessageIDProvider); ok {
+		return p.MessageID()
+	}
+	return ""
 }
 
 // ToggleExpandedSelectedItem expands the selected message item if it is expandable.

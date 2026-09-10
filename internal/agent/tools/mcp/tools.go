@@ -43,10 +43,12 @@ func RunTool(ctx context.Context, cfg *config.ConfigStore, name, toolName string
 	if err != nil {
 		return ToolResult{}, err
 	}
-	result, err := c.CallTool(ctx, &mcp.CallToolParams{
+	callCtx, cancel := context.WithTimeout(ctx, mcpTimeout(cfg.Config().MCP[name]))
+	result, err := c.CallTool(callCtx, &mcp.CallToolParams{
 		Name:      toolName,
 		Arguments: args,
 	})
+	cancel()
 	if err != nil {
 		return ToolResult{}, err
 	}
