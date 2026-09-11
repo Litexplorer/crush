@@ -280,27 +280,20 @@ type AssistantInfoItem struct {
 	sty                 *styles.Styles
 	cfg                 *config.Config
 	lastUserMessageTime time.Time
-
-	// turnTokens is the output token count of the turn this footer closes.
-	// The caller snapshots it because messages restored from disk carry no
-	// per-turn token accounting, and a later turn would otherwise leak its
-	// own count into an old footer.
-	turnTokens int64
 }
 
 /*
 """
 sty: 样式集合
-msg: 已经结束的 assistant 消息
+msg: 已经结束的 assistant 消息，其 Finish part 携带本回合的输出 token 与吐字耗时
 cfg: 配置，用于取模型名与 provider 名
 lastUserMessageTime: 本回合用户消息的时间，用于计算耗时
-turnTokens: 本回合累计输出的 token 数，0 表示不展示速率
 核心流程:
-1. 冻结消息、样式、耗时起点与 token 数
-2. 构造后数据不再变化，因此该条目可以安全地被列表缓存
+1. 冻结消息、样式与耗时起点
+2. 速率由 Finish part 里落库的回合记账算出，因此重启会话后读到的与实时一致
 """
 */
-func NewAssistantInfoItem(sty *styles.Styles, msg *message.Message, cfg *config.Config, lastUserMessageTime time.Time, turnTokens int64) MessageItem {
+func NewAssistantInfoItem(sty *styles.Styles, msg *message.Message, cfg *config.Config, lastUserMessageTime time.Time) MessageItem {
 	return &AssistantInfoItem{
 		Versioned:           list.NewVersioned(),
 		cachedMessageItem:   &cachedMessageItem{},
@@ -309,7 +302,6 @@ func NewAssistantInfoItem(sty *styles.Styles, msg *message.Message, cfg *config.
 		sty:                 sty,
 		cfg:                 cfg,
 		lastUserMessageTime: lastUserMessageTime,
-		turnTokens:          turnTokens,
 	}
 }
 
@@ -368,10 +360,12 @@ func (a *AssistantInfoItem) renderContent(width int) string {
 	finishTime := time.Unix(finishData.Time, 0)
 	duration := finishTime.Sub(a.lastUserMessageTime)
 	infoMsg := a.sty.Messages.AssistantInfoDuration.Render(fmt.Sprintf("in %s", duration))
-	if seconds := duration.Seconds(); a.turnTokens > 0 && seconds > 0 {
-		// 整体速率与左边耗时的口径一致：整个回合并发出去的 token 除以整个
-		// 回合的墙钟耗时（因而包含等待 provider 与工具执行的时间）。
-		rate := a.sty.Messages.AssistantInfoDuration.Render(fmt.Sprintf("%.0f tok/s", float64(a.turnTokens)/seconds))
+	// 速率与左边耗时口径不同：左边是含等待的回合墙钟（等 provider、跑工具都算），
+	// 速率只除以 Finish part 里记录的真实吐字耗时，因而不会被工具执行稀释。
+	// 这份记账随消息落库，重启后重开会话读到的是同一个数；老消息没有这份记账
+	// （字段为 0）时不显示速率。
+	if seconds := float64(finishData.GenerationMS) / 1000; finishData.OutputTokens > 0 && seconds >= 0.1 {
+		rate := a.sty.Messages.AssistantInfoDuration.Render(fmt.Sprintf("%.0f tok/s", float64(finishData.OutputTokens)/seconds))
 		infoMsg = fmt.Sprintf("%s · %s", infoMsg, rate)
 	}
 	icon := a.sty.Messages.AssistantInfoIcon.Render(styles.ModelIcon)

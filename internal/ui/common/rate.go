@@ -38,19 +38,14 @@ var tokenRate struct {
 	samples  []rateSample
 	smoothed float64
 	hasValue bool
-	// total is the output token count accumulated over the whole turn, used
-	// for the end-of-turn footer. It survives the window resets that happen
-	// when a new assistant message starts, so a turn that alternates between
-	// text and tool calls still adds up.
-	total int64
 }
 
 /*
 """
 无参数
 核心流程:
-1. 丢弃上一回合累积的采样窗口、平滑值与回合总量
-2. 由 StartTurn 在回合起点调用，保证速率与总量只统计本回合
+1. 丢弃上一回合累积的采样窗口与平滑值
+2. 由 StartTurn 在回合起点调用，保证速率只统计本回合
 """
 */
 func StartRate() {
@@ -59,20 +54,6 @@ func StartRate() {
 	tokenRate.samples = tokenRate.samples[:0]
 	tokenRate.smoothed = 0
 	tokenRate.hasValue = false
-	tokenRate.total = 0
-}
-
-/*
-"""
-无参数；返回本回合累计输出的 token 数，未开始统计时为 0
-核心流程:
-1. 直接返回回合累计量，供回合结束的 footer 计算整体速率
-"""
-*/
-func TurnTokens() int64 {
-	tokenRate.mu.Lock()
-	defer tokenRate.mu.Unlock()
-	return tokenRate.total
 }
 
 /*
@@ -81,11 +62,10 @@ text: 助手消息正文的累计文本
 thinking: 助手消息思考内容的累计文本
 核心流程:
 1. 估算正文与思考的累计 token 数（含 CJK 权重）
-2. 正增量累加进本回合总量
-3. 累计值回退时丢弃整个窗口，但保留总量（provider 重试或新 assistant 消息都会回退）
-4. 追加本次采样，并裁剪掉超出 rateHistory 的旧样本
-5. 历史不足 rateMinSpan 时不产出速率，避免开局把突发当成高速率
-6. 用窗口内的差分速率做 EWMA 平滑，供渲染路径直接读取
+2. 累计值回退时丢弃整个窗口（provider 重试或新 assistant 消息都会回退）
+3. 追加本次采样，并裁剪掉超出 rateHistory 的旧样本
+4. 历史不足 rateMinSpan 时不产出速率，避免开局把突发当成高速率
+5. 用窗口内的差分速率做 EWMA 平滑，供渲染路径直接读取
 """
 */
 func ObserveTokens(text, thinking string) {
@@ -103,8 +83,6 @@ func ObserveTokens(text, thinking string) {
 		tokenRate.samples = tokenRate.samples[:0]
 		tokenRate.smoothed = 0
 		tokenRate.hasValue = false
-	} else {
-		tokenRate.total += tokens - previous
 	}
 	tokenRate.samples = append(tokenRate.samples, rateSample{at: now, tokens: tokens})
 

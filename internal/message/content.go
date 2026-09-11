@@ -131,6 +131,33 @@ type Finish struct {
 	Time    int64        `json:"time"`
 	Message string       `json:"message,omitempty"`
 	Details string       `json:"details,omitempty"`
+	// OutputTokens and GenerationMS carry the turn accounting the TUI needs
+	// to print its footer rate. Both are cumulative for the turn that this
+	// finish closes, and both are persisted so a reopened session shows the
+	// same number it showed live. Zero means no accounting was recorded
+	// (older messages, error and cancel finishes).
+	OutputTokens int64 `json:"output_tokens,omitempty"`
+	GenerationMS int64 `json:"generation_ms,omitempty"`
+}
+
+/*
+"""
+outputTokens: 本回合至此累计输出的 token 数
+generationMS: 本回合至此累计的吐字耗时，单位毫秒
+核心流程:
+1. 就地改写 parts 中的 Finish part，FinishPart() 返回的是副本不能直接改
+2. 由 agent 在落库前写入，实时渲染与重启恢复读取同一份数据，保证两处一致
+"""
+*/
+func (m *Message) SetFinishMetrics(outputTokens, generationMS int64) {
+	for i, part := range m.Parts {
+		if finish, ok := part.(Finish); ok {
+			finish.OutputTokens = outputTokens
+			finish.GenerationMS = generationMS
+			m.Parts[i] = finish
+			return
+		}
+	}
 }
 
 func (Finish) isPart() {}

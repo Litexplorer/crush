@@ -173,3 +173,30 @@ func TestResetStreamedContentEmpty(t *testing.T) {
 	msg.ResetStreamedContent()
 	require.Empty(t, msg.Parts)
 }
+
+func TestSetFinishMetricsPersists(t *testing.T) {
+	t.Parallel()
+
+	msg := &Message{}
+	msg.AddFinish(FinishReasonEndTurn, "", "")
+	msg.SetFinishMetrics(400, 20_000)
+
+	// In-place update: readers of the finish part must see the new values,
+	// which is what the footer relies on right after the agent writes them.
+	finish := msg.FinishPart()
+	require.NotNil(t, finish)
+	require.EqualValues(t, 400, finish.OutputTokens)
+	require.EqualValues(t, 20_000, finish.GenerationMS)
+
+	// Round-trip through the parts JSON column, which is how a reopened
+	// session reads the metrics back.
+	raw, err := marshalParts(msg.Parts)
+	require.NoError(t, err)
+	parts, err := unmarshalParts(raw)
+	require.NoError(t, err)
+
+	restored, ok := parts[0].(Finish)
+	require.True(t, ok)
+	require.EqualValues(t, 400, restored.OutputTokens)
+	require.EqualValues(t, 20_000, restored.GenerationMS)
+}

@@ -793,6 +793,23 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	if call.MaxOutputTokens > 0 {
 		maxOutputTokens = &call.MaxOutputTokens
 	}
+
+	// 本回合的输出记账：累加每个 step 的输出 token 与吐字耗时（首个 delta 到
+	// 末个 delta 的间隔），写进该 step 的 Finish part。UI 的 footer 实时读它、
+	// 重启后从库里读同一份数据，因此重开看到的速率与刚才完全一致。
+	var turnMetrics struct {
+		outputTokens int64
+		generationMS int64
+		firstDelta   time.Time
+		lastDelta    time.Time
+	}
+	markStepDelta := func() {
+		now := time.Now()
+		if turnMetrics.firstDelta.IsZero() {
+			turnMetrics.firstDelta = now
+		}
+		turnMetrics.lastDelta = now
+	}
 	result, err = agent.Stream(genCtx, fantasy.AgentStreamCall{
 		Prompt:           message.PromptWithTextAttachments(call.Prompt, call.Attachments),
 		Files:            files,
@@ -882,6 +899,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			return a.messages.Update(genCtx, *currentAssistant)
 		},
 		OnReasoningDelta: func(id string, text string) error {
+			markStepDelta()
 			currentAssistant.AppendReasoningContent(text)
 			return a.messages.Update(genCtx, *currentAssistant)
 		},
@@ -906,6 +924,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			return a.messages.Update(genCtx, *currentAssistant)
 		},
 		OnTextDelta: func(id string, text string) error {
+			markStepDelta()
 			// Strip leading newline from initial text content. This is is
 			// particularly important in non-interactive mode where leading
 			// newlines are very visible.
@@ -948,6 +967,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			return m.Model
 		},
 		OnToolCall: func(tc fantasy.ToolCallContent) error {
+			markStepDelta()
 			input, wasSanitized := sanitizeToolInput(tc.ToolName, tc.ToolCallID, tc.Input)
 			if wasSanitized {
 				sanitizedToolCalls[tc.ToolCallID] = true
@@ -1032,6 +1052,16 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 				return sessionErr
 			}
 			currentSession = updatedSession
+
+			// 把本回合至此累计的输出 token 与吐字耗时写进 Finish part：footer 的
+			// 速率由它算出，落库后重开会话读到的就是同一个数。本 step 的吐字耗时
+			// 取首末 delta 的间隔，工具执行与等待 provider 的时间自然被排除。
+			turnMetrics.outputTokens += usage.OutputTokens
+			if !turnMetrics.firstDelta.IsZero() && turnMetrics.lastDelta.After(turnMetrics.firstDelta) {
+				turnMetrics.generationMS += turnMetrics.lastDelta.Sub(turnMetrics.firstDelta).Milliseconds()
+			}
+			currentAssistant.SetFinishMetrics(turnMetrics.outputTokens, turnMetrics.generationMS)
+			turnMetrics.firstDelta, turnMetrics.lastDelta = time.Time{}, time.Time{}
 			return a.messages.Update(genCtx, *currentAssistant)
 		},
 		StopWhen: []fantasy.StopCondition{

@@ -170,6 +170,10 @@ type Finish struct {
 	Time    int64        `json:"time"`
 	Message string       `json:"message,omitempty"`
 	Details string       `json:"details,omitempty"`
+	// Turn accounting carried over the wire so a client renders the same
+	// footer rate the server measured.
+	OutputTokens int64 `json:"output_tokens,omitempty"`
+	GenerationMS int64 `json:"generation_ms,omitempty"`
 }
 
 func (Finish) isPart() {}

@@ -1512,8 +1512,8 @@ func (m *UI) setSessionMessages(msgs []message.Message) tea.Cmd {
 		case message.Assistant:
 			items = append(items, chat.ExtractMessageItems(m.com.Styles, msg, toolResultMap, m.com.Workspace.WorkingDir())...)
 			if msg.FinishPart() != nil && msg.FinishPart().Reason == message.FinishReasonEndTurn {
-				// 从磁盘恢复的历史消息没有逐回合的 token 记账，传 0 表示不展示速率
-				infoItem := chat.NewAssistantInfoItem(m.com.Styles, msg, m.com.Config(), time.Unix(m.lastUserMessageTime, 0), 0)
+				// 速率来自 Finish part 里落库的回合记账，历史消息同样能展示
+				infoItem := chat.NewAssistantInfoItem(m.com.Styles, msg, m.com.Config(), time.Unix(m.lastUserMessageTime, 0))
 				items = append(items, infoItem)
 			}
 		default:
@@ -1696,7 +1696,7 @@ func (m *UI) appendSessionMessage(msg message.Message) tea.Cmd {
 			}
 		}
 		if msg.FinishPart() != nil && msg.FinishPart().Reason == message.FinishReasonEndTurn {
-			infoItem := chat.NewAssistantInfoItem(m.com.Styles, &msg, m.com.Config(), time.Unix(m.lastUserMessageTime, 0), common.TurnTokens())
+			infoItem := chat.NewAssistantInfoItem(m.com.Styles, &msg, m.com.Config(), time.Unix(m.lastUserMessageTime, 0))
 			m.chat.AppendMessages(infoItem)
 			if m.chat.Follow() {
 				if cmd := m.chat.ScrollToBottomAndAnimate(); cmd != nil {
@@ -1792,7 +1792,7 @@ func (m *UI) updateSessionMessage(msg message.Message) tea.Cmd {
 
 	if isEndTurn {
 		if infoItem := m.chat.MessageItem(chat.AssistantInfoID(msg.ID)); infoItem == nil {
-			newInfoItem := chat.NewAssistantInfoItem(m.com.Styles, &msg, m.com.Config(), time.Unix(m.lastUserMessageTime, 0), common.TurnTokens())
+			newInfoItem := chat.NewAssistantInfoItem(m.com.Styles, &msg, m.com.Config(), time.Unix(m.lastUserMessageTime, 0))
 			m.chat.AppendMessages(newInfoItem)
 		}
 	}

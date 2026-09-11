@@ -97,23 +97,4 @@ func TestStartRateClearsWindow(t *testing.T) {
 	StartRate()
 	require.Empty(t, tokenRate.samples)
 	require.Empty(t, TokensPerSecond())
-	require.EqualValues(t, 0, TurnTokens())
-}
-
-func TestTurnTokensAccumulateAcrossMessages(t *testing.T) {
-	StartRate()
-
-	// First assistant message of the turn: 3 then 4 estimated tokens.
-	ObserveTokens("abcd efgh", "")
-	ObserveTokens("abcd efgh ijkl", "")
-	require.EqualValues(t, 4, TurnTokens())
-
-	// The turn then runs a tool and streams a second assistant message,
-	// whose content restarts from empty. The rate window resets, the turn
-	// total must not.
-	ObserveTokens("new", "")
-	require.EqualValues(t, 4, TurnTokens())
-
-	ObserveTokens("new reply", "")
-	require.EqualValues(t, 6, TurnTokens(), "1 + 2 more tokens on top of the first message")
 }
