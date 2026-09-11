@@ -238,7 +238,18 @@ func NewAssistantMessageItem(sty *styles.Styles, message *message.Message) Messa
 		LabelColor:  sty.WorkingLabelColor,
 		CycleColors: true,
 		Suffix: func() string {
-			return common.Elapsed()
+			// anim.Render 每帧都会调用 Suffix，且 Animate 里的 Bump 会强制
+			// 重渲，因此这里的速率不需要额外的 ticker 就能跟着 spinner 刷新。
+			elapsed := common.Elapsed()
+			rate := common.TokensPerSecond()
+			switch {
+			case elapsed != "" && rate != "":
+				return elapsed + " · " + rate
+			case rate != "":
+				return rate
+			default:
+				return elapsed
+			}
 		},
 		SuffixColor: sty.WorkingTimerColor,
 	})
@@ -295,8 +306,36 @@ func (a *AssistantMessageItem) RawRender(width int) string {
 		}
 		return highlightedContent + spinner
 	}
+	if rate := a.renderLiveRate(); rate != "" {
+		if highlightedContent != "" {
+			highlightedContent += "\n\n"
+		}
+		return highlightedContent + rate
+	}
 
 	return highlightedContent
+}
+
+/*
+"""
+无参数，返回可以渲染的速率行；不适用时返回空串
+核心流程:
+1. 正在转 spinner、已结束、或有工具调用在跑时不渲染
+2. spinner 已带速率，工具执行期间也并没有在吐字
+3. 读取本回合的实时速率，尚未产生速率时返回空串
+4. 用 WorkingTimerColor 着色，与 spinner 后缀保持一致
+上游在出现正文后就隐藏 spinner（ff9cbf65），但那段正是最需要看速率的窗口，因此速率单独占一行，挂在每次流式刷新的重渲染上。
+"""
+*/
+func (a *AssistantMessageItem) renderLiveRate() string {
+	if a.isSpinning() || a.message.IsFinished() || len(a.message.ToolCalls()) > 0 {
+		return ""
+	}
+	rate := common.TokensPerSecond()
+	if rate == "" {
+		return ""
+	}
+	return lipgloss.NewStyle().Foreground(a.sty.WorkingTimerColor).Render(rate)
 }
 
 // Render implements MessageItem.

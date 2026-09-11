@@ -445,14 +445,34 @@ func (a *Anim) Render() string {
 	var b strings.Builder
 	step := int(a.step.Load())
 	frames := int(a.framesSinceStart.Load())
-	for i := range a.width {
+
+	// Render the cycling characters first: an active suffix belongs directly
+	// to their right, ahead of the label.
+	for i := range a.cyclingCharWidth {
+		if !a.initialized.Load() && i < len(a.birthSteps) && frames < a.birthSteps[i] {
+			// Birth step not reached: render initial character.
+			b.WriteString(a.initialFrames[step][i])
+			continue
+		}
+		// Render a cycling character.
+		b.WriteString(a.cyclingFrames[step][i])
+	}
+
+	// Render optional suffix (e.g., elapsed time, live token rate).
+	hasSuffix := false
+	if a.suffix != nil {
+		if suffixStr := a.suffix(); suffixStr != "" {
+			b.WriteString(" ")
+			b.WriteString(lipgloss.NewStyle().Foreground(a.suffixColor).Render(suffixStr))
+			hasSuffix = true
+		}
+	}
+
+	for i := a.cyclingCharWidth; i < a.width; i++ {
 		switch {
 		case !a.initialized.Load() && i < len(a.birthSteps) && frames < a.birthSteps[i]:
 			// Birth step not reached: render initial character.
 			b.WriteString(a.initialFrames[step][i])
-		case i < a.cyclingCharWidth:
-			// Render a cycling character.
-			b.WriteString(a.cyclingFrames[step][i])
 		case i == a.cyclingCharWidth && a.cyclingCharWidth > 0:
 			// Render label gap (only when there are cycling chars).
 			b.WriteString(labelGap)
@@ -467,30 +487,14 @@ func (a *Anim) Render() string {
 			}
 		}
 	}
+
 	// Render animated ellipsis at the end of the label if all characters
 	// have been initialized. Skip when a suffix is active to avoid visual
 	// competition between the animated dots and the timer.
-	if a.initialized.Load() && a.labelWidth > 0 {
-		showEllipsis := true
-		if a.suffix != nil {
-			if s := a.suffix(); s != "" {
-				showEllipsis = false
-			}
-		}
-		if showEllipsis {
-			ellipsisStep := int(a.ellipsisStep.Load())
-			if ellipsisFrame, ok := a.ellipsisFrames.Get(ellipsisStep / ellipsisAnimSpeed); ok {
-				b.WriteString(ellipsisFrame)
-			}
-		}
-	}
-
-	// Render optional suffix (e.g., elapsed time).
-	if a.suffix != nil {
-		suffixStr := a.suffix()
-		if suffixStr != "" {
-			b.WriteString(" ")
-			b.WriteString(lipgloss.NewStyle().Foreground(a.suffixColor).Render(suffixStr))
+	if a.initialized.Load() && a.labelWidth > 0 && !hasSuffix {
+		ellipsisStep := int(a.ellipsisStep.Load())
+		if ellipsisFrame, ok := a.ellipsisFrames.Get(ellipsisStep / ellipsisAnimSpeed); ok {
+			b.WriteString(ellipsisFrame)
 		}
 	}
 

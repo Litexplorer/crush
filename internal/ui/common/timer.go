@@ -15,6 +15,9 @@ var turnTimer struct {
 
 // StartTurn begins tracking elapsed time for a new turn.
 func StartTurn() {
+	// 回合起点同时重置 token 速率窗口，避免继承上一回合的采样
+	StartRate()
+
 	turnTimer.mu.Lock()
 	defer turnTimer.mu.Unlock()
 	turnTimer.startTime = time.Now()

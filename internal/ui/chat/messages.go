@@ -280,18 +280,36 @@ type AssistantInfoItem struct {
 	sty                 *styles.Styles
 	cfg                 *config.Config
 	lastUserMessageTime time.Time
+
+	// turnTokens is the output token count of the turn this footer closes.
+	// The caller snapshots it because messages restored from disk carry no
+	// per-turn token accounting, and a later turn would otherwise leak its
+	// own count into an old footer.
+	turnTokens int64
 }
 
-// NewAssistantInfoItem creates a new AssistantInfoItem.
-func NewAssistantInfoItem(sty *styles.Styles, message *message.Message, cfg *config.Config, lastUserMessageTime time.Time) MessageItem {
+/*
+"""
+sty: 样式集合
+msg: 已经结束的 assistant 消息
+cfg: 配置，用于取模型名与 provider 名
+lastUserMessageTime: 本回合用户消息的时间，用于计算耗时
+turnTokens: 本回合累计输出的 token 数，0 表示不展示速率
+核心流程:
+1. 冻结消息、样式、耗时起点与 token 数
+2. 构造后数据不再变化，因此该条目可以安全地被列表缓存
+"""
+*/
+func NewAssistantInfoItem(sty *styles.Styles, msg *message.Message, cfg *config.Config, lastUserMessageTime time.Time, turnTokens int64) MessageItem {
 	return &AssistantInfoItem{
 		Versioned:           list.NewVersioned(),
 		cachedMessageItem:   &cachedMessageItem{},
-		id:                  AssistantInfoID(message.ID),
-		message:             message,
+		id:                  AssistantInfoID(msg.ID),
+		message:             msg,
 		sty:                 sty,
 		cfg:                 cfg,
 		lastUserMessageTime: lastUserMessageTime,
+		turnTokens:          turnTokens,
 	}
 }
 
@@ -350,6 +368,12 @@ func (a *AssistantInfoItem) renderContent(width int) string {
 	finishTime := time.Unix(finishData.Time, 0)
 	duration := finishTime.Sub(a.lastUserMessageTime)
 	infoMsg := a.sty.Messages.AssistantInfoDuration.Render(fmt.Sprintf("in %s", duration))
+	if seconds := duration.Seconds(); a.turnTokens > 0 && seconds > 0 {
+		// 整体速率与左边耗时的口径一致：整个回合并发出去的 token 除以整个
+		// 回合的墙钟耗时（因而包含等待 provider 与工具执行的时间）。
+		rate := a.sty.Messages.AssistantInfoDuration.Render(fmt.Sprintf("%.0f tok/s", float64(a.turnTokens)/seconds))
+		infoMsg = fmt.Sprintf("%s · %s", infoMsg, rate)
+	}
 	icon := a.sty.Messages.AssistantInfoIcon.Render(styles.ModelIcon)
 	model := a.cfg.GetModel(a.message.Provider, a.message.Model)
 	if model == nil {

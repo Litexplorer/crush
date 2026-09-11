@@ -1,8 +1,10 @@
 package anim
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/require"
 )
 
@@ -235,4 +237,29 @@ func TestAnimateWithoutStart(t *testing.T) {
 	msg := StepMsg{ID: "test", Gen: 0}
 	next := a.Animate(msg)
 	require.NotNil(t, next, "matching gen-0 tick must advance a fresh Anim")
+}
+
+// TestSuffixRendersBeforeLabel guards the layout of an animated line that
+// carries a dynamic suffix: the suffix hugs the cycling characters and the
+// label follows it, so a live metric is not pushed past a long label.
+func TestSuffixRendersBeforeLabel(t *testing.T) {
+	t.Parallel()
+
+	newSettled := func(suffix func() string) *Anim {
+		a := New(Settings{ID: "test-suffix", Size: 3, Label: "Thinking", Suffix: suffix})
+		// Skip the staggered birth animation so every character is present.
+		a.framesSinceStart.Store(int64(maxBirthSteps))
+		a.initialized.Store(true)
+		return a
+	}
+
+	got := ansi.Strip(newSettled(func() string { return "42 tok/s" }).Render())
+	require.Contains(t, got, "42 tok/s")
+	require.Contains(t, got, "Thinking")
+	require.Less(t, strings.Index(got, "42 tok/s"), strings.Index(got, "Thinking"),
+		"the suffix must sit to the right of the marquee, ahead of the label")
+
+	empty := ansi.Strip(newSettled(func() string { return "" }).Render())
+	require.NotContains(t, empty, "tok/s")
+	require.Contains(t, empty, "Thinking")
 }

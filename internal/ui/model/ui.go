@@ -956,6 +956,11 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, cmd)
 			}
 		case pubsub.UpdatedEvent:
+			// 采样流式输出的累计 token 量，供 spinner 旁与正文下方的实时速率展示使用。
+			// 只统计助手消息：用户消息的更新会让累计值回退并清空窗口。
+			if msg.Payload.Role == message.Assistant {
+				common.ObserveTokens(msg.Payload.Content().Text, msg.Payload.ReasoningContent().Thinking)
+			}
 			cmds = append(cmds, m.updateSessionMessage(msg.Payload))
 		case pubsub.DeletedEvent:
 			m.chat.RemoveMessage(msg.Payload.ID)
@@ -1507,7 +1512,8 @@ func (m *UI) setSessionMessages(msgs []message.Message) tea.Cmd {
 		case message.Assistant:
 			items = append(items, chat.ExtractMessageItems(m.com.Styles, msg, toolResultMap, m.com.Workspace.WorkingDir())...)
 			if msg.FinishPart() != nil && msg.FinishPart().Reason == message.FinishReasonEndTurn {
-				infoItem := chat.NewAssistantInfoItem(m.com.Styles, msg, m.com.Config(), time.Unix(m.lastUserMessageTime, 0))
+				// 从磁盘恢复的历史消息没有逐回合的 token 记账，传 0 表示不展示速率
+				infoItem := chat.NewAssistantInfoItem(m.com.Styles, msg, m.com.Config(), time.Unix(m.lastUserMessageTime, 0), 0)
 				items = append(items, infoItem)
 			}
 		default:
@@ -1690,7 +1696,7 @@ func (m *UI) appendSessionMessage(msg message.Message) tea.Cmd {
 			}
 		}
 		if msg.FinishPart() != nil && msg.FinishPart().Reason == message.FinishReasonEndTurn {
-			infoItem := chat.NewAssistantInfoItem(m.com.Styles, &msg, m.com.Config(), time.Unix(m.lastUserMessageTime, 0))
+			infoItem := chat.NewAssistantInfoItem(m.com.Styles, &msg, m.com.Config(), time.Unix(m.lastUserMessageTime, 0), common.TurnTokens())
 			m.chat.AppendMessages(infoItem)
 			if m.chat.Follow() {
 				if cmd := m.chat.ScrollToBottomAndAnimate(); cmd != nil {
@@ -1786,7 +1792,7 @@ func (m *UI) updateSessionMessage(msg message.Message) tea.Cmd {
 
 	if isEndTurn {
 		if infoItem := m.chat.MessageItem(chat.AssistantInfoID(msg.ID)); infoItem == nil {
-			newInfoItem := chat.NewAssistantInfoItem(m.com.Styles, &msg, m.com.Config(), time.Unix(m.lastUserMessageTime, 0))
+			newInfoItem := chat.NewAssistantInfoItem(m.com.Styles, &msg, m.com.Config(), time.Unix(m.lastUserMessageTime, 0), common.TurnTokens())
 			m.chat.AppendMessages(newInfoItem)
 		}
 	}
