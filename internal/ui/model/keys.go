@@ -88,6 +88,7 @@ type KeyMap struct {
 	QuestionIndex    key.Binding
 	Tab              key.Binding
 	ToggleYolo       key.Binding
+	ShiftTab         key.Binding
 	// ToggleManualScroll toggles manual scroll mode. It is intentionally not
 	// exposed in the bottom help bar (no WithHelp); the shortcut is shown in
 	// the commands palette instead.
@@ -142,6 +143,10 @@ func DefaultKeyMap() KeyMap {
 		),
 		ToggleManualScroll: key.NewBinding(
 			key.WithKeys("ctrl+a"),
+		),
+		ShiftTab: key.NewBinding(
+			key.WithKeys("shift+tab"),
+			key.WithHelp("shift+tab", "mode"),
 		),
 	}
 
