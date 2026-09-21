@@ -556,6 +556,7 @@ func (c *Commands) defaultCommands() []*CommandItem {
 		manualScrollLabel = "Disable Manual Scroll"
 	}
 	commands = append(commands, NewCommandItem(c.com.Styles, "toggle_manual_scroll", manualScrollLabel, "ctrl+a", ActionToggleManualScroll{}))
+	commands = append(commands, NewCommandItem(c.com.Styles, "switch_theme", "Themes", "", ActionOpenDialog{ThemeID}))
 
 	// Add mouse support toggle.
 	mouseLabel := "Disable Mouse"

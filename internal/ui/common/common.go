@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"image"
-	"log/slog"
 	"os"
 	"slices"
 	"strings"
@@ -141,49 +140,19 @@ func (c *Common) Config() *config.Config {
 	return c.Workspace.Config()
 }
 
-// DefaultCommon returns the default common UI configurations.
-// If a custom theme file is configured via options.tui.theme_file, it
-// takes precedence over provider-based theme selection.
+// DefaultCommon returns the default common UI configurations using the
+// theme from config (or the default Charmtone theme if unset).
 func DefaultCommon(ws workspace.Workspace) *Common {
-	s := LoadActiveTheme(ws)
+	var s styles.Styles
+	if ws != nil {
+		s = ThemeStylesFromConfig(ws.Config())
+	} else {
+		s = LoadThemeStyles("")
+	}
 	return &Common{
 		Workspace: ws,
 		Styles:    &s,
 	}
-}
-
-/*
-"""
-ws: 工作区实例 (可为 nil)
-核心流程:
-1. 若 ws 为 nil，直接回退到默认 provider 主题
-2. 读取 cfg.Options.TUI.ThemeFile，若配置了主题文件则解析环境变量并读取
-3. 成功反序列化 JSON 主题后返回自定义 Styles
-4. 若读取或解析失败，打日志降级回退至根据 large model 的 provider 选取主题
-"""
-*/
-func LoadActiveTheme(ws workspace.Workspace) styles.Styles {
-	if ws == nil {
-		return styles.ThemeForProvider("")
-	}
-	cfg := ws.Config()
-	if cfg != nil && cfg.Options != nil && cfg.Options.TUI != nil &&
-		cfg.Options.TUI.ThemeFile != "" {
-		expanded := os.ExpandEnv(cfg.Options.TUI.ThemeFile)
-		data, err := os.ReadFile(expanded)
-		if err == nil {
-			s, err := styles.ThemeFromJSON(data)
-			if err == nil {
-				return s
-			}
-			slog.Warn("Failed to parse theme file, falling back to provider theme",
-				"file", expanded, "error", err)
-		} else {
-			slog.Warn("Failed to read theme file, falling back to provider theme",
-				"file", expanded, "error", err)
-		}
-	}
-	return styles.ThemeForProvider(largeModelProviderID(ws))
 }
 
 // largeModelProviderID returns the provider ID of the currently selected
@@ -197,6 +166,37 @@ func largeModelProviderID(ws workspace.Workspace) string {
 		return ""
 	}
 	return cfg.Models[config.SelectedModelTypeLarge].Provider
+}
+
+// NewCommon returns common UI configurations using the given theme.
+func NewCommon(ws workspace.Workspace, themeName string) *Common {
+	s := LoadThemeStyles(themeName)
+	return &Common{
+		Workspace: ws,
+		Styles:    &s,
+	}
+}
+
+// ThemeNameFromConfig extracts the theme name from config, returning ""
+// (which LoadTheme treats as the default) when config is nil or unset.
+func ThemeNameFromConfig(cfg *config.Config) string {
+	if cfg == nil || cfg.Options == nil || cfg.Options.TUI == nil {
+		return ""
+	}
+	return cfg.Options.TUI.ActiveTheme
+}
+
+// LoadThemeStyles resolves a theme name to Styles, falling back to
+// CharmtonePantera on error or empty name.
+func LoadThemeStyles(name string) styles.Styles {
+	return styles.ThemeFromConfig(name)
+}
+
+// ThemeStylesFromConfig resolves the configured theme to Styles. The
+// active_theme field selects either a built-in theme or a global user theme
+// file.
+func ThemeStylesFromConfig(cfg *config.Config) styles.Styles {
+	return LoadThemeStyles(ThemeNameFromConfig(cfg))
 }
 
 // IsHyper reports whether the currently selected large model is provided

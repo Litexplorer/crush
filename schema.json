@@ -807,6 +807,15 @@
           ],
           "description": "Diff mode for the TUI interface"
         },
+        "active_theme": {
+          "type": "string",
+          "description": "Name of the currently active theme",
+          "default": "charmtone-panther",
+          "examples": [
+            "charmtone-panther",
+            "gruvbox-dark"
+          ]
+        },
         "completions": {
           "$ref": "#/$defs/Completions",
           "description": "Completions UI options"
@@ -825,6 +834,11 @@
           ],
           "description": "Chat scrollbar visibility",
           "default": "default"
+        },
+        "manual_scroll": {
+          "type": "boolean",
+          "description": "Disable automatic scrolling to the bottom while content streams; the view only moves when the user scrolls manually",
+          "default": false
         },
         "mouse": {
           "type": "boolean",
