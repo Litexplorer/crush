@@ -160,7 +160,11 @@ func Connect(ctx context.Context, dataDir string, opts ...ConnectOption) (*sql.D
 		return nil, fmt.Errorf("failed to initialize goose: %w", err)
 	}
 
-	if err := goose.Up(conn, "migrations"); err != nil {
+	// A branching fork can leave a database at a version newer than a
+	// migration that only exists upstream. goose refuses to start in that
+	// case, so allow out-of-order migrations and let the missing ones be
+	// applied here instead of failing the whole startup.
+	if err := goose.Up(conn, "migrations", goose.WithAllowMissing()); err != nil {
 		conn.Close()
 		releaseLock()
 		slog.Error("Failed to apply migrations", "error", err)

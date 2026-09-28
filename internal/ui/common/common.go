@@ -257,6 +257,9 @@ func CopyToClipboard(text, successMessage string) tea.Cmd {
 // The callback and the success message only run when the copy is believed to
 // have worked, so callers can safely use the callback to discard the copied
 // state (a selection, say) without losing it on a failed copy.
+//
+// Terminals that ignore OSC 52 get a warning instead of the success message:
+// see [clipboardUnreachable].
 func CopyToClipboardWithCallback(text, successMessage string, callback tea.Cmd) tea.Cmd {
 	return func() tea.Msg {
 		// The native write goes first and is verified before OSC 52 goes out,
@@ -270,9 +273,64 @@ func CopyToClipboardWithCallback(text, successMessage string, callback tea.Cmd) 
 		// the doubt. Only a native clipboard that accepted the write and then
 		// does not hold the text is a real failure.
 		osc52 := tea.SetClipboard(text)
-		if errors.Is(err, clipboard.ErrWriteFailed) {
-			return tea.Sequence(osc52, util.ReportWarn("Failed to copy to clipboard"))()
+		if warning := copyWarning(err); warning != "" {
+			return tea.Sequence(osc52, util.ReportWarn(warning))()
 		}
 		return tea.Sequence(osc52, callback, util.ReportInfo(successMessage))()
 	}
+}
+
+// copyWarning returns the warning to show when the copy did not reach the
+// clipboard the user pastes from, and the empty string when it did.
+//
+// writeErr 原生剪切板写入的结果
+// 写入失败优先报错；终端丢弃 OSC 52 且会话在远端时报终端限制；其余情况视为
+// 成功，返回空字符串。
+func copyWarning(writeErr error) string {
+	if errors.Is(writeErr, clipboard.ErrWriteFailed) {
+		return "Failed to copy to clipboard"
+	}
+	if clipboardUnreachable() {
+		return jetBrainsClipboardHint
+	}
+	return ""
+}
+
+// jetBrainsTerminalMarker matches the TERMINAL_EMULATOR value JetBrains IDEs
+// export to their shells, for both the classic JediTerm engine and the
+// reworked one.
+const jetBrainsTerminalMarker = "JetBrains"
+
+// jetBrainsClipboardHint explains why the copy did not reach the user and what
+// to do instead.
+const jetBrainsClipboardHint = "JetBrains terminals ignore OSC 52, so the copy stays on the remote host. Set options.tui.mouse=false to copy with the IDE instead"
+
+// clipboardUnreachable reports whether a copy cannot reach the clipboard the
+// user pastes from, either because the terminal ignores OSC 52 clipboard
+// writes or because the native write landed on another host's clipboard.
+//
+// 无参数
+// JetBrains 终端未实现 OSC 52（见 IJPL-255616），因此其复制序列在抵达用户
+// 剪切板前就被丢弃；再叠加 SSH 会话时，原生剪切板写的也是远端主机的剪切板，
+// 两条通道都到不了用户手上，此时必须提示而不是报成功。
+func clipboardUnreachable() bool {
+	return osc52UnsupportedTerminal() && isRemoteSession()
+}
+
+// osc52UnsupportedTerminal reports whether the outer terminal is known to drop
+// OSC 52 clipboard writes.
+//
+// 无参数
+// 读取 TERMINAL_EMULATOR，命中 JetBrains 终端时返回 true。
+func osc52UnsupportedTerminal() bool {
+	return strings.Contains(os.Getenv("TERMINAL_EMULATOR"), jetBrainsTerminalMarker)
+}
+
+// isRemoteSession reports whether crush shares the clipboard with the machine
+// the user is looking at.
+//
+// 无参数
+// 存在 SSH_TTY 或 SSH_CONNECTION 时判定为远端会话。
+func isRemoteSession() bool {
+	return os.Getenv("SSH_TTY") != "" || os.Getenv("SSH_CONNECTION") != ""
 }

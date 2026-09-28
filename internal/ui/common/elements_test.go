@@ -33,3 +33,27 @@ func TestFormatTokensAndCostOmitsEstimatedPrefix(t *testing.T) {
 	require.Contains(t, actual, "12%")
 	require.NotContains(t, actual, "~12%")
 }
+
+func TestFormatTokens(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		tokens int64
+		want   string
+	}{
+		{"zero", 0, "0"},
+		{"below thousand", 999, "999"},
+		{"exact thousand drops decimals", 1000, "1K"},
+		{"thousands keep one decimal", 12345, "12.3K"},
+		{"exact million drops decimals", 1000000, "1M"},
+		{"millions keep one decimal", 1234000, "1.2M"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tt.want, FormatTokens(tt.tokens))
+		})
+	}
+}

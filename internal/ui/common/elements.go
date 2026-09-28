@@ -91,25 +91,30 @@ func ModelInfo(t *styles.Styles, modelName, providerName, reasoningInfo string, 
 	)
 }
 
+// FormatTokens formats a token count with K/M units (e.g., 12.3K, 1.2M).
+func FormatTokens(tokens int64) string {
+	var formatted string
+	switch {
+	case tokens >= 1_000_000:
+		formatted = fmt.Sprintf("%.1fM", float64(tokens)/1_000_000)
+	case tokens >= 1_000:
+		formatted = fmt.Sprintf("%.1fK", float64(tokens)/1_000)
+	default:
+		formatted = fmt.Sprintf("%d", tokens)
+	}
+
+	// "1.0K" reads better as "1K".
+	if i := strings.Index(formatted, ".0"); i >= 0 {
+		formatted = formatted[:i] + formatted[i+2:]
+	}
+
+	return formatted
+}
+
 // formatTokensAndCost formats token usage and cost with appropriate units
 // (K/M) and percentage of context window.
 func formatTokensAndCost(t *styles.Styles, tokens, contextWindow int64, cost float64, estimated bool) string {
-	var formattedTokens string
-	switch {
-	case tokens >= 1_000_000:
-		formattedTokens = fmt.Sprintf("%.1fM", float64(tokens)/1_000_000)
-	case tokens >= 1_000:
-		formattedTokens = fmt.Sprintf("%.1fK", float64(tokens)/1_000)
-	default:
-		formattedTokens = fmt.Sprintf("%d", tokens)
-	}
-
-	if strings.HasSuffix(formattedTokens, ".0K") {
-		formattedTokens = strings.Replace(formattedTokens, ".0K", "K", 1)
-	}
-	if strings.HasSuffix(formattedTokens, ".0M") {
-		formattedTokens = strings.Replace(formattedTokens, ".0M", "M", 1)
-	}
+	formattedTokens := FormatTokens(tokens)
 
 	var percentage float64
 	if contextWindow > 0 {
