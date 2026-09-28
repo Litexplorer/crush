@@ -1728,7 +1728,9 @@ func (c *coordinator) updateParentSessionCost(ctx context.Context, childSessionI
 		return fmt.Errorf("get parent session: %w", err)
 	}
 
+	// Sub-agent usage counts towards the parent session's lifetime totals.
 	parentSession.Cost += childSession.Cost
+	parentSession.TotalTokens += childSession.TotalTokens
 
 	if _, err := c.sessions.Save(ctx, parentSession); err != nil {
 		return fmt.Errorf("save parent session: %w", err)

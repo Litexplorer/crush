@@ -1991,6 +1991,10 @@ func (a *sessionAgent) updateSessionUsage(model Model, session *session.Session,
 }
 
 func updateSessionTokenCounters(session *session.Session, usage fantasy.Usage) {
+	// PromptTokens/CompletionTokens describe the latest request only, so the
+	// context percentage stays meaningful. TotalTokens is the running sum of
+	// every request in the session and is never reset by summarization.
+	session.TotalTokens += usage.InputTokens + usage.CacheReadTokens + usage.OutputTokens
 	if usage.OutputTokens != 0 {
 		session.CompletionTokens = usage.OutputTokens
 	}

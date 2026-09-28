@@ -178,6 +178,16 @@ func renderHeaderDetails(
 		parts = append(parts, formattedPercentage)
 	}
 
+	// Session lifetime usage, unlike the percentage above which only covers
+	// the current context window.
+	if session.TotalTokens > 0 {
+		total := common.FormatTokens(session.TotalTokens)
+		if session.EstimatedUsage {
+			total = "~" + total
+		}
+		parts = append(parts, t.Header.Percentage.Render(total))
+	}
+
 	if com.IsHyper() && hyperCredits != nil {
 		hc := t.Header.HypercreditIcon.Render(styles.HypercreditIcon) + " " + t.Header.Percentage.Render(common.FormatCredits(*hyperCredits))
 		parts = append(parts, hc)

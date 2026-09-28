@@ -79,3 +79,50 @@ func TestEstimatedUsageStateCanBeClearedByExplicitSave(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, refetched.EstimatedUsage)
 }
+
+// TestTotalTokensPersistAcrossSaveAndGet covers the write -> read loop for the
+// session lifetime token counter, including a fetch-modify-save cycle that
+// only touches unrelated fields.
+func TestTotalTokensPersistAcrossSaveAndGet(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Cleanup(func() {
+		require.NoError(t, db.Release(dataDir))
+		db.ResetPool()
+	})
+
+	conn, err := db.Connect(t.Context(), dataDir)
+	require.NoError(t, err)
+
+	sessions := NewService(db.New(conn), conn)
+
+	created, err := sessions.Create(t.Context(), "test")
+	require.NoError(t, err)
+	require.Zero(t, created.TotalTokens)
+
+	created.PromptTokens = 100
+	created.CompletionTokens = 50
+	created.TotalTokens = 150
+
+	saved, err := sessions.Save(t.Context(), created)
+	require.NoError(t, err)
+	require.Equal(t, int64(150), saved.TotalTokens)
+
+	fetched, err := sessions.Get(t.Context(), created.ID)
+	require.NoError(t, err)
+	require.Equal(t, int64(150), fetched.TotalTokens)
+
+	fetched.Todos = []Todo{{
+		Content:    "Check the lifetime total",
+		Status:     TodoStatusInProgress,
+		ActiveForm: "Checking the lifetime total",
+	}}
+	fetched.TotalTokens += 250
+
+	updated, err := sessions.Save(t.Context(), fetched)
+	require.NoError(t, err)
+	require.Equal(t, int64(400), updated.TotalTokens)
+
+	refetched, err := sessions.Get(t.Context(), created.ID)
+	require.NoError(t, err)
+	require.Equal(t, int64(400), refetched.TotalTokens)
+}
