@@ -261,34 +261,39 @@ func CopyToClipboard(text, successMessage string) tea.Cmd {
 // Terminals that ignore OSC 52 get a warning instead of the success message:
 // see [clipboardUnreachable].
 func CopyToClipboardWithCallback(text, successMessage string, callback tea.Cmd) tea.Cmd {
-	return tea.Sequence(
-		tea.SetClipboard(text),
-		func() tea.Msg {
-			return copyResultMsg(clipboard.WriteText(text), successMessage, callback)
-		},
-	)
+	return func() tea.Msg {
+		// The native write goes first and is verified before OSC 52 goes out,
+		// because the terminal handles OSC 52 by writing the very same
+		// clipboard on its own schedule. Verifying afterwards means reading
+		// back in the middle of somebody else's write, which reports a good
+		// copy as lost.
+		err := clipboard.WriteText(text)
+		// OSC 52 is fire and forget: the terminal never answers, so a platform
+		// without a native clipboard (an SSH session, say) gets the benefit of
+		// the doubt. Only a native clipboard that accepted the write and then
+		// does not hold the text is a real failure.
+		osc52 := tea.SetClipboard(text)
+		if warning := copyWarning(err); warning != "" {
+			return tea.Sequence(osc52, util.ReportWarn(warning))()
+		}
+		return tea.Sequence(osc52, callback, util.ReportInfo(successMessage))()
+	}
 }
 
-// copyResultMsg turns the outcome of the native clipboard write into the
-// message shown to the user.
+// copyWarning returns the warning to show when the copy did not reach the
+// clipboard the user pastes from, and the empty string when it did.
 //
 // writeErr 原生剪切板写入的结果
-// successMessage 复制成功时展示的提示
-// callback 复制落地后才执行的额外动作
-// 写入失败优先报错；终端丢弃 OSC 52 且会话在远端时报终端限制；其余情况才
-// 报成功。
-func copyResultMsg(writeErr error, successMessage string, callback tea.Cmd) tea.Msg {
-	// OSC 52 is fire and forget: the terminal never answers, so a platform
-	// without a native clipboard (an SSH session, say) gets the benefit of the
-	// doubt. Only a native clipboard that accepted the write and then does not
-	// hold the text is a real failure.
+// 写入失败优先报错；终端丢弃 OSC 52 且会话在远端时报终端限制；其余情况视为
+// 成功，返回空字符串。
+func copyWarning(writeErr error) string {
 	if errors.Is(writeErr, clipboard.ErrWriteFailed) {
-		return util.NewWarnMsg("Failed to copy to clipboard")
+		return "Failed to copy to clipboard"
 	}
 	if clipboardUnreachable() {
-		return util.NewWarnMsg(jetBrainsClipboardHint)
+		return jetBrainsClipboardHint
 	}
-	return tea.Sequence(callback, util.ReportInfo(successMessage))()
+	return ""
 }
 
 // jetBrainsTerminalMarker matches the TERMINAL_EMULATOR value JetBrains IDEs

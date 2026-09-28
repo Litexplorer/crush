@@ -51,7 +51,14 @@ SET
     total_tokens = ?,
     summary_message_id = ?,
     cost = ?,
-    todos = ?
+    todos = ?,
+    channel = ?
+WHERE id = ?
+RETURNING *;
+
+-- name: SetSessionChannel :one
+UPDATE sessions
+SET channel = ?
 WHERE id = ?
 RETURNING *;
 

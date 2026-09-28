@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/crush/internal/clipboard"
-	"github.com/charmbracelet/crush/internal/ui/util"
 )
 
 // TestClipboardUnreachable walks the terminal × session matrix that decides
@@ -71,45 +70,39 @@ func TestClipboardUnreachable(t *testing.T) {
 	}
 }
 
-// TestCopyResultMsg checks which message the user gets for each copy outcome.
+// TestCopyWarning checks which warning the user gets for each copy outcome.
 //
 // 无参数
 // 覆盖写入失败、远端 JetBrains 终端（含原生剪切板不可用）、本地 JetBrains
-// 终端与支持 OSC 52 的终端四种分支，确保只有真正到不了用户手上的复制才被
-// 降级为警告，其余仍走成功提示。
-func TestCopyResultMsg(t *testing.T) {
-	const successMessage = "Message copied to clipboard"
-
+// 终端与支持 OSC 52 的终端四种分支，确保只有真正到不了用户手上的复制才返回
+// 警告文案，其余返回空字符串走成功提示。
+func TestCopyWarning(t *testing.T) {
 	tests := []struct {
 		name             string
 		writeErr         error
 		terminalEmulator string
 		sshTTY           string
-		wantWarn         bool
-		wantMessage      string
+		wantWarning      string
 	}{
 		{
 			name:             "native write failure wins",
 			writeErr:         clipboard.ErrWriteFailed,
 			terminalEmulator: "JetBrains-JediTerm",
 			sshTTY:           "/dev/pts/5",
-			wantWarn:         true,
-			wantMessage:      "Failed to copy to clipboard",
+			wantWarning:      "Failed to copy to clipboard",
 		},
 		{
 			name:             "no native clipboard in a remote jetbrains session",
 			writeErr:         clipboard.ErrUnsupported,
 			terminalEmulator: "JetBrains-JediTerm",
 			sshTTY:           "/dev/pts/5",
-			wantWarn:         true,
-			wantMessage:      jetBrainsClipboardHint,
+			wantWarning:      jetBrainsClipboardHint,
 		},
 		{
 			name:             "remote jetbrains session",
 			terminalEmulator: "JetBrains-JediTerm",
 			sshTTY:           "/dev/pts/5",
-			wantWarn:         true,
-			wantMessage:      jetBrainsClipboardHint,
+			wantWarning:      jetBrainsClipboardHint,
 		},
 		{
 			name:             "local jetbrains session",
@@ -128,22 +121,8 @@ func TestCopyResultMsg(t *testing.T) {
 			t.Setenv("SSH_TTY", tt.sshTTY)
 			t.Setenv("SSH_CONNECTION", "")
 
-			msg := copyResultMsg(tt.writeErr, successMessage, nil)
-			info, isInfo := msg.(util.InfoMsg)
-			if !isInfo {
-				t.Fatalf("expected an info message, got %T", msg)
-			}
-			if !tt.wantWarn {
-				if info.Type != util.InfoTypeInfo || info.Msg != successMessage {
-					t.Fatalf("expected success message %q, got type %v message %q", successMessage, info.Type, info.Msg)
-				}
-				return
-			}
-			if info.Type != util.InfoTypeWarn {
-				t.Fatalf("expected a warning, got type %v message %q", info.Type, info.Msg)
-			}
-			if info.Msg != tt.wantMessage {
-				t.Fatalf("warning = %q, want %q", info.Msg, tt.wantMessage)
+			if got := copyWarning(tt.writeErr); got != tt.wantWarning {
+				t.Fatalf("copyWarning() = %q, want %q", got, tt.wantWarning)
 			}
 		})
 	}
