@@ -54,3 +54,16 @@ manpages/
 completions/crush.*sh
 .prettierignore
 .task
+
+# Local build artifacts
+/my-crush*
+.nfs*
+
+# Local build helper scripts
+/build_and_check.sh
+/build_win10.sh
+
+# Local diagnostic scaffolding (frame capture/replay)
+/internal/ui/model/frame_dump.go
+/internal/ui/model/zz_replay_test.go
+/tmp_x11probe/
