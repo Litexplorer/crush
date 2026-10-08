@@ -216,6 +216,7 @@ type Workspace interface {
 	// Config (read-only data)
 	Config() *config.Config
 	WorkingDir() string
+	GitBranch(ctx context.Context) (string, error)
 	Resolver() config.VariableResolver
 
 	// ReloadConfig reloads the configuration from disk, picking up
