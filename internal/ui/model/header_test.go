@@ -48,7 +48,7 @@ func TestRenderHeaderDetailsAppendsSessionTotalAfterPercentage(t *testing.T) {
 		TotalTokens:      1_234_000,
 	}
 
-	out := ansi.Strip(renderHeaderDetails(headerTestCommon(t), sess, 0, false, 200, nil))
+	out := ansi.Strip(renderHeaderDetails(headerTestCommon(t), sess, 0, false, 200, nil, ""))
 
 	require.Contains(t, out, "42%")
 	require.Contains(t, out, "1.2M")
@@ -68,7 +68,7 @@ func TestRenderHeaderDetailsOmitsZeroSessionTotal(t *testing.T) {
 		CompletionTokens: 24_000,
 	}
 
-	out := ansi.Strip(renderHeaderDetails(headerTestCommon(t), sess, 0, false, 200, nil))
+	out := ansi.Strip(renderHeaderDetails(headerTestCommon(t), sess, 0, false, 200, nil, ""))
 
 	require.Contains(t, out, "42%")
 	require.Equal(t, 2, strings.Count(out, " • "))
@@ -88,7 +88,7 @@ func TestRenderHeaderDetailsMarksEstimatedTotal(t *testing.T) {
 		EstimatedUsage:   true,
 	}
 
-	out := ansi.Strip(renderHeaderDetails(headerTestCommon(t), sess, 0, false, 200, nil))
+	out := ansi.Strip(renderHeaderDetails(headerTestCommon(t), sess, 0, false, 200, nil, ""))
 
 	require.Contains(t, out, "~42%")
 	require.Contains(t, out, "~1.2M")
