@@ -36,6 +36,7 @@ type Todo struct {
 	Content    string     `json:"content"`
 	Status     TodoStatus `json:"status"`
 	ActiveForm string     `json:"active_form"`
+	Parent     string     `json:"parent,omitempty"`
 }
 
 // HasIncompleteTodos returns true if there are any non-completed todos.
@@ -46,6 +47,41 @@ func HasIncompleteTodos(todos []Todo) bool {
 		}
 	}
 	return false
+}
+
+// TodoDepths 计算每个待办节点的嵌套层级。
+//
+// todos
+// 待办列表，扁平存储，节点通过 Parent（父节点的 Content）表达树形关系。
+//
+// 核心流程
+// 1. 建立 content -> parent 映射
+// 2. 逐节点向上回溯 parent 链并累计层级
+// 3. 父节点缺失时层级归 0；链上出现环时在首次重访处截断，层级保持有界，保证调用可终止
+func TodoDepths(todos []Todo) map[string]int {
+	parentByContent := make(map[string]string, len(todos))
+	for _, t := range todos {
+		parentByContent[t.Content] = t.Parent
+	}
+
+	depths := make(map[string]int, len(todos))
+	for _, t := range todos {
+		depth := 0
+		seen := map[string]struct{}{t.Content: {}}
+		for cur := t.Parent; cur != ""; {
+			if _, ok := seen[cur]; ok {
+				break
+			}
+			seen[cur] = struct{}{}
+			if _, ok := parentByContent[cur]; !ok {
+				break
+			}
+			depth++
+			cur = parentByContent[cur]
+		}
+		depths[t.Content] = depth
+	}
+	return depths
 }
 
 type Session struct {

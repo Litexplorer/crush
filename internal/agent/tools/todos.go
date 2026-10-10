@@ -22,6 +22,7 @@ type TodoItem struct {
 	Content    string `json:"content" description:"What needs to be done (imperative form)"`
 	Status     string `json:"status" description:"Task status: pending, in_progress, or completed"`
 	ActiveForm string `json:"active_form" description:"Present continuous form (e.g., 'Running tests')"`
+	Parent     string `json:"parent,omitempty" description:"Content of the parent todo for nesting; empty for a top-level task"`
 }
 
 type TodosResponseMetadata struct {
@@ -54,12 +55,8 @@ func NewTodosTool(sessions session.Service) fantasy.AgentTool {
 				oldStatusByContent[todo.Content] = todo.Status
 			}
 
-			for _, item := range params.Todos {
-				switch item.Status {
-				case "pending", "in_progress", "completed":
-				default:
-					return fantasy.ToolResponse{}, fmt.Errorf("invalid status %q for todo %q", item.Status, item.Content)
-				}
+			if err := validateTodos(params.Todos); err != nil {
+				return fantasy.ToolResponse{}, err
 			}
 
 			todos := make([]session.Todo, len(params.Todos))
@@ -72,6 +69,7 @@ func NewTodosTool(sessions session.Service) fantasy.AgentTool {
 					Content:    item.Content,
 					Status:     session.TodoStatus(item.Status),
 					ActiveForm: item.ActiveForm,
+					Parent:     item.Parent,
 				}
 
 				newStatus := session.TodoStatus(item.Status)
@@ -132,4 +130,57 @@ func NewTodosTool(sessions session.Service) fantasy.AgentTool {
 			return fantasy.WithResponseMetadata(fantasy.NewTextResponse(response), metadata), nil
 		},
 	)
+}
+
+// validateTodos 校验待办列表的合法性与树形结构（扁平列表 + parent 引用）。
+//
+// items
+// 待写入的待办条目，含 content / status / active_form / parent。
+//
+// 核心流程
+// 1. 校验 status 取值、content 非空且唯一（content 作为树形结构的键）
+// 2. 校验 parent 非自引用且必须指向本批次内已存在的 content
+// 3. 从每个节点向上回溯 parent 链，检测环引用
+func validateTodos(items []TodoItem) error {
+	contentSet := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		switch item.Status {
+		case "pending", "in_progress", "completed":
+		default:
+			return fmt.Errorf("invalid status %q for todo %q", item.Status, item.Content)
+		}
+		if item.Content == "" {
+			return fmt.Errorf("todo content must not be empty")
+		}
+		if _, dup := contentSet[item.Content]; dup {
+			return fmt.Errorf("duplicate todo content %q: content is used as the tree key", item.Content)
+		}
+		contentSet[item.Content] = struct{}{}
+	}
+
+	parentByContent := make(map[string]string, len(items))
+	for _, item := range items {
+		parentByContent[item.Content] = item.Parent
+		if item.Parent == "" {
+			continue
+		}
+		if item.Parent == item.Content {
+			return fmt.Errorf("todo %q cannot be its own parent", item.Content)
+		}
+		if _, ok := contentSet[item.Parent]; !ok {
+			return fmt.Errorf("todo %q references missing parent %q", item.Content, item.Parent)
+		}
+	}
+
+	for _, item := range items {
+		seen := make(map[string]struct{})
+		for cur := item.Content; cur != ""; {
+			if _, ok := seen[cur]; ok {
+				return fmt.Errorf("cyclic parent chain detected at %q", cur)
+			}
+			seen[cur] = struct{}{}
+			cur = parentByContent[cur]
+		}
+	}
+	return nil
 }

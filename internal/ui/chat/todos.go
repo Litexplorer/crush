@@ -135,18 +135,17 @@ func (t *TodosToolRenderContext) RenderTool(sty *styles.Styles, width int, opts 
 	return joinToolParts(header, sty.Tool.Body.Render(body))
 }
 
-// FormatTodosList formats a list of todos for display.
+// FormatTodosList formats a list of todos for display as a tree.
 func FormatTodosList(sty *styles.Styles, todos []session.Todo, inProgressIcon string, width int) string {
 	if len(todos) == 0 {
 		return ""
 	}
 
-	sorted := make([]session.Todo, len(todos))
-	copy(sorted, todos)
-	sortTodos(sorted)
+	ordered := orderedTodos(todos)
+	depths := session.TodoDepths(todos)
 
 	var lines []string
-	for _, todo := range sorted {
+	for _, todo := range ordered {
 		var prefix string
 		textStyle := sty.Tool.TodoItem
 
@@ -159,11 +158,13 @@ func FormatTodosList(sty *styles.Styles, todos []session.Todo, inProgressIcon st
 			prefix = sty.Tool.TodoPendingIcon.Render(styles.TodoPendingIcon) + " "
 		}
 
+		indent := strings.Repeat(todoIndentUnit, depths[todo.Content])
+
 		text := todo.Content
 		if todo.Status == session.TodoStatusInProgress && todo.ActiveForm != "" {
 			text = todo.ActiveForm
 		}
-		line := prefix + textStyle.Render(text)
+		line := indent + prefix + textStyle.Render(text)
 		line = ansi.Truncate(line, width, "…")
 
 		lines = append(lines, line)
@@ -172,11 +173,68 @@ func FormatTodosList(sty *styles.Styles, todos []session.Todo, inProgressIcon st
 	return strings.Join(lines, "\n")
 }
 
-// sortTodos sorts todos by status: completed, in_progress, pending.
-func sortTodos(todos []session.Todo) {
-	slices.SortStableFunc(todos, func(a, b session.Todo) int {
+// todoIndentUnit is the indentation applied per nesting level.
+const todoIndentUnit = "  "
+
+// orderedTodos flattens the parent-referenced todos into depth-first order,
+// sorting by status only within each sibling group. Missing parents render as
+// top-level, and cyclic or otherwise unreachable nodes are appended at the end
+// so rendering never silently drops a task.
+func orderedTodos(todos []session.Todo) []session.Todo {
+	exists := make(map[string]struct{}, len(todos))
+	for _, t := range todos {
+		exists[t.Content] = struct{}{}
+	}
+
+	children := make(map[string][]session.Todo)
+	var roots []session.Todo
+	for _, t := range todos {
+		if t.Parent == "" || t.Parent == t.Content {
+			roots = append(roots, t)
+			continue
+		}
+		if _, ok := exists[t.Parent]; !ok {
+			roots = append(roots, t)
+			continue
+		}
+		children[t.Parent] = append(children[t.Parent], t)
+	}
+
+	var out []session.Todo
+	visited := make(map[string]struct{}, len(todos))
+	var walk func(items []session.Todo)
+	walk = func(items []session.Todo) {
+		for _, t := range sortedByStatus(items) {
+			if _, seen := visited[t.Content]; seen {
+				continue
+			}
+			visited[t.Content] = struct{}{}
+			out = append(out, t)
+			walk(children[t.Content])
+		}
+	}
+	walk(roots)
+
+	// Anything unreachable from a root (e.g. a parent cycle) is still shown.
+	for _, t := range sortedByStatus(todos) {
+		if _, seen := visited[t.Content]; seen {
+			continue
+		}
+		visited[t.Content] = struct{}{}
+		out = append(out, t)
+	}
+	return out
+}
+
+// sortedByStatus orders completed → in_progress → pending, stable within equal
+// statuses.
+func sortedByStatus(todos []session.Todo) []session.Todo {
+	out := make([]session.Todo, len(todos))
+	copy(out, todos)
+	slices.SortStableFunc(out, func(a, b session.Todo) int {
 		return statusOrder(a.Status) - statusOrder(b.Status)
 	})
+	return out
 }
 
 // statusOrder returns the sort order for a todo status.

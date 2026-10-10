@@ -1345,6 +1345,7 @@ func protoToTodos(todos []proto.Todo) []session.Todo {
 			Content:    t.Content,
 			Status:     session.TodoStatus(t.Status),
 			ActiveForm: t.ActiveForm,
+			Parent:     t.Parent,
 		}
 	}
 	return out
@@ -1497,6 +1498,7 @@ func todosToProto(todos []session.Todo) []proto.Todo {
 			Content:    t.Content,
 			Status:     string(t.Status),
 			ActiveForm: t.ActiveForm,
+			Parent:     t.Parent,
 		}
 	}
 	return out
