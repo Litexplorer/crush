@@ -3499,6 +3499,17 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 					m.updateLayoutAndSize()
 				}
 
+				// The textarea splits words on whitespace alone, so an
+				// unspaced CJK run counts as a single word. Handle the word
+				// keys ourselves when they touch CJK text and leave every
+				// other case to the textarea.
+				if handled, cmd := m.handleCJKWordKeys(msg); handled {
+					if cmd != nil {
+						cmds = append(cmds, cmd)
+					}
+					break
+				}
+
 				prevHeight := m.textarea.Height()
 				cmds = append(cmds, m.updateTextareaWithPrevHeight(msg, prevHeight))
 
@@ -3507,6 +3518,14 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 				// empty/whitespace-only prompt or prepended to existing text).
 				// Exit on backspace clearing the last character.
 				newVal := m.textarea.Value()
+
+				// Load the CJK dictionary in the background as soon as the
+				// prompt holds CJK text, so the first word deletion is instant
+				// without making non-CJK users pay for the dictionary.
+				if cmd := warmCJKSegmenterFor(newVal); cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+
 				trimmedNew := strings.TrimLeftFunc(newVal, unicode.IsSpace)
 				trimmedCur := strings.TrimLeftFunc(curValue, unicode.IsSpace)
 				if !m.bangMode && strings.HasPrefix(trimmedNew, "!") && !strings.HasPrefix(trimmedCur, "!") {
