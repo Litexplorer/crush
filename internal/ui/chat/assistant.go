@@ -244,29 +244,7 @@ func NewAssistantMessageItem(sty *styles.Styles, message *message.Message) Messa
 		sty:                      sty,
 	}
 
-	a.anim = anim.New(anim.Settings{
-		ID:          a.ID(),
-		Size:        15,
-		GradColorA:  sty.WorkingGradFromColor,
-		GradColorB:  sty.WorkingGradToColor,
-		LabelColor:  sty.WorkingLabelColor,
-		CycleColors: true,
-		Suffix: func() string {
-			// anim.Render 每帧都会调用 Suffix，且 Animate 里的 Bump 会强制
-			// 重渲，因此这里的速率不需要额外的 ticker 就能跟着 spinner 刷新。
-			elapsed := common.Elapsed()
-			rate := common.TokensPerSecond()
-			switch {
-			case elapsed != "" && rate != "":
-				return elapsed + " · " + rate
-			case rate != "":
-				return rate
-			default:
-				return elapsed
-			}
-		},
-		SuffixColor: sty.WorkingTimerColor,
-	})
+	a.anim = newTurnAnim(sty, a.ID(), message.SessionID)
 	return a
 }
 

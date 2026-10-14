@@ -6,40 +6,47 @@ import (
 	"time"
 )
 
-// turnTimer tracks the elapsed time for the current agent turn.
-var turnTimer struct {
-	mu        sync.Mutex
-	startTime time.Time
-	active    bool
-}
+// turnClock tracks when each session's current turn started. Turns in
+// different sessions run concurrently, so one clock per session: a turn
+// finishing in one session must not reset the elapsed time shown in
+// another.
+var turnClock = struct {
+	mu      sync.Mutex
+	started map[string]time.Time
+}{started: map[string]time.Time{}}
 
-// StartTurn begins tracking elapsed time for a new turn.
-func StartTurn() {
+// StartTurn starts sessionID's turn clock from now, replacing any earlier
+// start.
+func StartTurn(sessionID string) {
+	if sessionID == "" {
+		return
+	}
 	// 回合起点同时重置 token 速率窗口，避免继承上一回合的采样
 	StartRate()
 
-	turnTimer.mu.Lock()
-	defer turnTimer.mu.Unlock()
-	turnTimer.startTime = time.Now()
-	turnTimer.active = true
+	turnClock.mu.Lock()
+	defer turnClock.mu.Unlock()
+	turnClock.started[sessionID] = time.Now()
 }
 
-// StopTurn stops tracking the current turn.
-func StopTurn() {
-	turnTimer.mu.Lock()
-	defer turnTimer.mu.Unlock()
-	turnTimer.active = false
+// StopTurn stops tracking sessionID's turn.
+func StopTurn(sessionID string) {
+	turnClock.mu.Lock()
+	defer turnClock.mu.Unlock()
+	delete(turnClock.started, sessionID)
 }
 
-// Elapsed returns the formatted elapsed time for the current turn.
-// Returns empty string if no turn is active.
-func Elapsed() string {
-	turnTimer.mu.Lock()
-	defer turnTimer.mu.Unlock()
-	if !turnTimer.active {
+// Elapsed returns the formatted elapsed time for sessionID's turn, or an
+// empty string when that session is not timing one.
+func Elapsed(sessionID string) string {
+	turnClock.mu.Lock()
+	startTime, timing := turnClock.started[sessionID]
+	turnClock.mu.Unlock()
+	if !timing {
 		return ""
 	}
-	elapsed := time.Since(turnTimer.startTime)
+
+	elapsed := time.Since(startTime)
 	totalSeconds := int(elapsed.Seconds())
 	minutes := int(elapsed.Minutes())
 	hours := int(elapsed.Hours())
