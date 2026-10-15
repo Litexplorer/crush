@@ -3,6 +3,7 @@ package completions
 import (
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/stretchr/testify/require"
 )
@@ -105,4 +106,62 @@ func TestFilterPrefersPathSegmentExact(t *testing.T) {
 	first, ok := filtered[0].(*CompletionItem)
 	require.True(t, ok)
 	require.Equal(t, "internal/ui/chat/mcp.go", first.Text())
+}
+
+func TestOpenMentionsSetsTrigger(t *testing.T) {
+	t.Parallel()
+
+	c := New(lipgloss.NewStyle(), lipgloss.NewStyle(), lipgloss.NewStyle())
+	cmd := c.OpenMentions(func() ([]SkillCompletionValue, []MCPCompletionValue) {
+		return []SkillCompletionValue{{ID: "skills/dev/SKILL.md", Name: "dev"}},
+			[]MCPCompletionValue{{Name: "github"}}
+	})
+
+	msg, ok := cmd().(CompletionItemsLoadedMsg)
+	require.True(t, ok)
+	require.Equal(t, "#", msg.Trigger)
+	require.Len(t, msg.Skills, 1)
+	require.Len(t, msg.MCPs, 1)
+	require.Empty(t, msg.Files)
+}
+
+func TestSetMentionItemsSelectsSkillAndServer(t *testing.T) {
+	t.Parallel()
+
+	c := New(lipgloss.NewStyle(), lipgloss.NewStyle(), lipgloss.NewStyle())
+	c.SetMentionItems(
+		[]SkillCompletionValue{{ID: "skills/dev/SKILL.md", Name: "dev"}},
+		[]MCPCompletionValue{{Name: "github"}},
+	)
+
+	require.True(t, c.IsOpen())
+	require.True(t, c.HasItems())
+
+	skill, ok := c.selectCurrent(true).(SelectionMsg[SkillCompletionValue])
+	require.True(t, ok)
+	require.Equal(t, "dev", skill.Value.Name)
+	require.Equal(t, "skills/dev/SKILL.md", skill.Value.ID)
+
+	// Filtering down to the server yields the server selection type.
+	c.Filter("git")
+	server, ok := c.selectCurrent(false).(SelectionMsg[MCPCompletionValue])
+	require.True(t, ok)
+	require.Equal(t, "github", server.Value.Name)
+}
+
+func TestUpdateWithNoItemsLetsKeysThrough(t *testing.T) {
+	t.Parallel()
+
+	c := New(lipgloss.NewStyle(), lipgloss.NewStyle(), lipgloss.NewStyle())
+	c.SetMentionItems(nil, nil)
+	require.True(t, c.IsOpen())
+	require.False(t, c.HasItems())
+
+	// Enter must reach the editor instead of being swallowed by an empty popup.
+	_, handled := c.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	require.False(t, handled)
+
+	msg, handled := c.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	require.True(t, handled)
+	require.IsType(t, ClosedMsg{}, msg)
 }

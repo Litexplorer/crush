@@ -38,11 +38,20 @@ type SelectionMsg[T any] struct {
 // ClosedMsg is sent when the completions are closed.
 type ClosedMsg struct{}
 
-// CompletionItemsLoadedMsg is sent when files have been loaded for completions.
+// CompletionItemsLoadedMsg is sent when the items for a completion popup have
+// been loaded. Trigger carries the character that opened the popup so the
+// receiver can tell which set of items arrived.
 type CompletionItemsLoadedMsg struct {
+	Trigger   string
 	Files     []FileCompletionValue
 	Resources []ResourceCompletionValue
+	Skills    []SkillCompletionValue
+	MCPs      []MCPCompletionValue
 }
+
+// MentionItemsLoader loads the skills and MCP servers shown by the `#`
+// completion popup. It runs off the UI goroutine, so it may do I/O.
+type MentionItemsLoader func() ([]SkillCompletionValue, []MCPCompletionValue)
 
 // Completions represents the completions popup component.
 type Completions struct {
@@ -143,7 +152,7 @@ func (c *Completions) KeyMap() KeyMap {
 // Open opens the completions with file items from the filesystem.
 func (c *Completions) Open(depth, limit int) tea.Cmd {
 	return func() tea.Msg {
-		var msg CompletionItemsLoadedMsg
+		msg := CompletionItemsLoadedMsg{Trigger: "@"}
 		var wg sync.WaitGroup
 		wg.Go(func() {
 			msg.Files = loadFiles(depth, limit)
@@ -156,34 +165,58 @@ func (c *Completions) Open(depth, limit int) tea.Cmd {
 	}
 }
 
+// OpenMentions opens the completions with skills and MCP servers, resolved by
+// the given loader.
+func (c *Completions) OpenMentions(load MentionItemsLoader) tea.Cmd {
+	return func() tea.Msg {
+		skills, mcps := load()
+		return CompletionItemsLoadedMsg{Trigger: "#", Skills: skills, MCPs: mcps}
+	}
+}
+
 // SetItems sets the files and MCP resources and rebuilds the merged list.
 func (c *Completions) SetItems(files []FileCompletionValue, resources []ResourceCompletionValue) {
 	items := make([]list.FilterableItem, 0, len(files)+len(resources))
 
 	// Add files first.
 	for _, file := range files {
-		item := NewCompletionItem(
-			file.Path,
-			file,
-			c.normalStyle,
-			c.focusedStyle,
-			c.matchStyle,
-		)
-		items = append(items, item)
+		items = append(items, c.newItem(file.Path, file))
 	}
 
 	// Add MCP resources.
 	for _, resource := range resources {
-		item := NewCompletionItem(
-			resource.MCPName+"/"+cmp.Or(resource.Title, resource.URI),
-			resource,
-			c.normalStyle,
-			c.focusedStyle,
-			c.matchStyle,
-		)
-		items = append(items, item)
+		items = append(items, c.newItem(resource.MCPName+"/"+cmp.Or(resource.Title, resource.URI), resource))
 	}
 
+	c.show(items)
+}
+
+// SetMentionItems sets the skills and MCP servers and rebuilds the merged
+// list.
+func (c *Completions) SetMentionItems(skillItems []SkillCompletionValue, servers []MCPCompletionValue) {
+	items := make([]list.FilterableItem, 0, len(skillItems)+len(servers))
+
+	// Add skills first.
+	for _, skill := range skillItems {
+		items = append(items, c.newItem(skill.Name, skill))
+	}
+
+	// Add MCP servers.
+	for _, server := range servers {
+		items = append(items, c.newItem(server.Name, server))
+	}
+
+	c.show(items)
+}
+
+// newItem builds a completion item that renders with the popup's styles.
+func (c *Completions) newItem(text string, value any) *CompletionItem {
+	return NewCompletionItem(text, value, c.normalStyle, c.focusedStyle, c.matchStyle)
+}
+
+// show replaces the popup contents and resets the selection. Both callers
+// (file/resources and skills/MCP servers) share this tail.
+func (c *Completions) show(items []list.FilterableItem) {
 	c.open = true
 	c.query = ""
 	c.allItems = items
@@ -301,6 +334,16 @@ func (c *Completions) Update(msg tea.KeyPressMsg) (tea.Msg, bool) {
 		return nil, false
 	}
 
+	// With nothing to pick there is no navigation to consume, so every key but
+	// the one that dismisses the popup has to keep working in the editor.
+	if !c.HasItems() {
+		if key.Matches(msg, c.keyMap.Cancel) {
+			c.Close()
+			return ClosedMsg{}, true
+		}
+		return nil, false
+	}
+
 	switch {
 	case key.Matches(msg, c.keyMap.Up):
 		c.selectPrev()
@@ -382,6 +425,16 @@ func (c *Completions) selectCurrent(keepOpen bool) tea.Msg {
 		}
 	case FileCompletionValue:
 		return SelectionMsg[FileCompletionValue]{
+			Value:    item,
+			KeepOpen: keepOpen,
+		}
+	case SkillCompletionValue:
+		return SelectionMsg[SkillCompletionValue]{
+			Value:    item,
+			KeepOpen: keepOpen,
+		}
+	case MCPCompletionValue:
+		return SelectionMsg[MCPCompletionValue]{
 			Value:    item,
 			KeepOpen: keepOpen,
 		}

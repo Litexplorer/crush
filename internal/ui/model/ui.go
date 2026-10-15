@@ -341,9 +341,10 @@ type UI struct {
 	// Completions state
 	completions              *completions.Completions
 	completionsOpen          bool
+	completionsTrigger       string // "@" for files and MCP resources, "#" for skills and MCP servers
 	completionsStartIndex    int
 	completionsQuery         string
-	completionsPositionStart image.Point // x,y where user typed '@'
+	completionsPositionStart image.Point // x,y where user typed '@' or '#'
 
 	// Chat components
 	chat *Chat
@@ -1614,8 +1615,22 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case util.ClearStatusMsg:
 		m.status.ClearInfoMsg()
 	case completions.CompletionItemsLoadedMsg:
-		if m.completionsOpen {
-			m.completions.SetItems(msg.Files, msg.Resources)
+		// Drop items that belong to a trigger the user has already left.
+		if m.completionsOpen && msg.Trigger == m.completionsTrigger {
+			if msg.Trigger == "#" {
+				m.completions.SetMentionItems(msg.Skills, msg.MCPs)
+			} else {
+				m.completions.SetItems(msg.Files, msg.Resources)
+			}
+			if !m.completions.HasItems() {
+				// Nothing to offer: don't leave an empty popup holding the
+				// editor's keys hostage.
+				m.closeCompletions()
+			} else if m.completionsQuery != "" {
+				// The user kept typing while the items loaded, so re-apply
+				// the query the loader was unaware of.
+				m.completions.Filter(m.completionsQuery)
+			}
 		}
 	case uv.KittyGraphicsEvent:
 		if !bytes.HasPrefix(msg.Payload, []byte("OK")) {
@@ -3341,8 +3356,18 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 						if !msg.KeepOpen {
 							m.closeCompletions()
 						}
+					case completions.SelectionMsg[completions.SkillCompletionValue]:
+						cmds = append(cmds, m.insertSkillCompletion(msg.Value))
+						if !msg.KeepOpen {
+							m.closeCompletions()
+						}
+					case completions.SelectionMsg[completions.MCPCompletionValue]:
+						cmds = append(cmds, m.insertMCPCompletion(msg.Value))
+						if !msg.KeepOpen {
+							m.closeCompletions()
+						}
 					case completions.ClosedMsg:
-						m.completionsOpen = false
+						m.closeCompletions()
 					}
 					return tea.Batch(cmds...)
 				}
@@ -3507,20 +3532,26 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 					break
 				}
 
-				// Check for @ trigger before passing to textarea.
+				// Check for mention triggers before passing to textarea.
 				curValue := m.textarea.Value()
 				curIdx := len(curValue)
 
-				// Trigger completions on @.
-				if msg.String() == "@" && !m.completionsOpen {
+				// Trigger completions on @ (files and MCP resources) or #
+				// (skills and MCP servers).
+				if trigger := msg.String(); (trigger == "@" || trigger == "#") && !m.completionsOpen {
 					// Only show if beginning of prompt or after whitespace.
 					if curIdx == 0 || (curIdx > 0 && isWhitespace(curValue[curIdx-1])) {
 						m.completionsOpen = true
+						m.completionsTrigger = trigger
 						m.completionsQuery = ""
 						m.completionsStartIndex = curIdx
 						m.completionsPositionStart = m.completionsPosition()
-						depth, limit := m.com.Config().Options.TUI.Completions.Limits()
-						cmds = append(cmds, m.completions.Open(depth, limit))
+						if trigger == "#" {
+							cmds = append(cmds, m.completions.OpenMentions(m.loadMentionItems))
+						} else {
+							depth, limit := m.com.Config().Options.TUI.Completions.Limits()
+							cmds = append(cmds, m.completions.Open(depth, limit))
+						}
 					}
 				}
 
@@ -3583,8 +3614,8 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 				m.updateHistoryDraft(curValue)
 
 				// After updating textarea, check if we need to filter completions.
-				// Skip filtering on the initial @ keystroke since items are loading async.
-				if m.completionsOpen && msg.String() != "@" {
+				// Skip filtering on the trigger keystroke since items are loading async.
+				if m.completionsOpen && msg.String() != m.completionsTrigger {
 					newValue := m.textarea.Value()
 					newIdx := len(newValue)
 
@@ -3597,7 +3628,7 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 					} else {
 						// Extract current word and filter.
 						word := m.textareaWord()
-						if strings.HasPrefix(word, "@") {
+						if strings.HasPrefix(word, m.completionsTrigger) {
 							m.completionsQuery = word[1:]
 							m.completions.Filter(m.completionsQuery)
 						} else if m.completionsOpen {
@@ -4187,6 +4218,7 @@ func (m *UI) FullHelp() [][]key.Binding {
 			editorBinds := []key.Binding{
 				k.Editor.Newline,
 				k.Editor.MentionFile,
+				k.Editor.MentionSkill,
 				k.Editor.OpenEditor,
 				k.Editor.PasteText,
 				k.Editor.SelectAll,
@@ -4263,6 +4295,7 @@ func (m *UI) FullHelp() [][]key.Binding {
 			editorBinds := []key.Binding{
 				k.Editor.Newline,
 				k.Editor.MentionFile,
+				k.Editor.MentionSkill,
 				k.Editor.OpenEditor,
 				k.Editor.PasteText,
 				k.Editor.SelectAll,
@@ -4993,6 +5026,7 @@ type modeSwitchedMsg struct {
 // closeCompletions closes the completions popup and resets state.
 func (m *UI) closeCompletions() {
 	m.completionsOpen = false
+	m.completionsTrigger = ""
 	m.completionsQuery = ""
 	m.completionsStartIndex = 0
 	m.completions.Close()
@@ -5118,6 +5152,59 @@ func (m *UI) insertMCPResourceCompletion(item completions.ResourceCompletionValu
 		}
 	}
 	return tea.Batch(heightCmd, resourceCmd)
+}
+
+// insertSkillCompletion inserts the selected skill into the textarea,
+// replacing the #query, and attaches the skill's content so the model has to
+// follow its instructions.
+func (m *UI) insertSkillCompletion(item completions.SkillCompletionValue) tea.Cmd {
+	prevHeight := m.textarea.Height()
+	if !m.insertCompletionText("#" + item.Name) {
+		return nil
+	}
+	heightCmd := m.handleTextareaHeightChange(prevHeight)
+	return tea.Batch(heightCmd, m.attachSkill(item.ID, item.Name))
+}
+
+// insertMCPCompletion inserts the selected MCP server into the textarea,
+// replacing the #query, and spells out in the prompt that the server's tools
+// should be used.
+func (m *UI) insertMCPCompletion(item completions.MCPCompletionValue) tea.Cmd {
+	prevHeight := m.textarea.Height()
+	text := fmt.Sprintf("#%s (use the %q MCP server tools)", item.Name, item.Name)
+	if !m.insertCompletionText(text) {
+		return nil
+	}
+	return m.handleTextareaHeightChange(prevHeight)
+}
+
+// loadMentionItems resolves the skills and MCP servers offered by the `#`
+// completion popup. It runs off the UI goroutine.
+func (m *UI) loadMentionItems() ([]completions.SkillCompletionValue, []completions.MCPCompletionValue) {
+	var skillItems []completions.SkillCompletionValue
+	entries, err := m.com.Workspace.ListSkills(context.Background())
+	if err != nil {
+		slog.Error("Failed to load skills for completions", "error", err)
+	}
+	for _, entry := range entries {
+		skillItems = append(skillItems, completions.SkillCompletionValue{
+			ID:   entry.ID,
+			Name: entry.Name,
+		})
+	}
+
+	var serverItems []completions.MCPCompletionValue
+	for name, info := range m.com.Workspace.MCPGetStates() {
+		if info.State == mcp.StateDisabled {
+			continue
+		}
+		serverItems = append(serverItems, completions.MCPCompletionValue{Name: name})
+	}
+	slices.SortFunc(serverItems, func(a, b completions.MCPCompletionValue) int {
+		return strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
+	})
+
+	return skillItems, serverItems
 }
 
 // completionsPosition returns the X and Y position for the completions popup.

@@ -23,6 +23,18 @@ type ResourceCompletionValue struct {
 	MIMEType string
 }
 
+// SkillCompletionValue represents a skill completion value.
+type SkillCompletionValue struct {
+	// ID is the skill identifier accepted by ReadSkill.
+	ID   string
+	Name string
+}
+
+// MCPCompletionValue represents an MCP server completion value.
+type MCPCompletionValue struct {
+	Name string
+}
+
 // CompletionItem represents an item in the completions list.
 type CompletionItem struct {
 	*list.Versioned

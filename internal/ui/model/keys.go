@@ -4,13 +4,14 @@ import "charm.land/bubbles/v2/key"
 
 type KeyMap struct {
 	Editor struct {
-		SendMessage key.Binding
-		OpenEditor  key.Binding
-		Newline     key.Binding
-		AddImage    key.Binding
-		PasteImage  key.Binding
-		MentionFile key.Binding
-		Commands    key.Binding
+		SendMessage  key.Binding
+		OpenEditor   key.Binding
+		Newline      key.Binding
+		AddImage     key.Binding
+		PasteImage   key.Binding
+		MentionFile  key.Binding
+		MentionSkill key.Binding
+		Commands     key.Binding
 
 		// Attachments key maps
 		AttachmentDeleteMode key.Binding
@@ -181,6 +182,10 @@ func DefaultKeyMap() KeyMap {
 	km.Editor.MentionFile = key.NewBinding(
 		key.WithKeys("@"),
 		key.WithHelp("@", "mention file"),
+	)
+	km.Editor.MentionSkill = key.NewBinding(
+		key.WithKeys("#"),
+		key.WithHelp("#", "mention skill or MCP server"),
 	)
 	km.Editor.Commands = key.NewBinding(
 		key.WithKeys("/"),
