@@ -44,18 +44,17 @@ func TestChat_ScrollToMessage(t *testing.T) {
 	c.SetSize(100, 10)
 
 	require.Equal(t, 0, c.list.Offset())
-	require.Nil(t, c.ScrollToMessage("missing"))
+	c.ScrollToMessage("missing")
 	require.Equal(t, 0, c.list.Offset())
 
-	cmd := c.ScrollToMessage("m3")
-	require.NotNil(t, cmd) // scrollbar hide tick
+	c.ScrollToMessage("m3")
+	require.NotNil(t, c.EnsureScrollbarHide()) // scrollbar hide tick
 	// Rows above m3: item0 (1) + gap (1) + item1 (1) + gap (1).
 	require.Equal(t, 4, c.list.Offset())
 	require.Equal(t, 2, c.list.Selected())
 
 	// Scrolling to an item leaves selection on it when selectable.
-	cmd = c.ScrollToMessage("m1")
-	require.NotNil(t, cmd)
+	c.ScrollToMessage("m1")
 	require.Equal(t, 0, c.list.Offset())
 	require.Equal(t, 0, c.list.Selected())
 }

@@ -47,6 +47,9 @@ func (c *streamScriptCoordinator) Model() agent.Model                           
 func (c *streamScriptCoordinator) UpdateModels(context.Context) error            { return nil }
 func (c *streamScriptCoordinator) GenerateTitle(context.Context, string, string) {}
 func (c *streamScriptCoordinator) SetMainAgent(string) error                     { return nil }
+func (c *streamScriptCoordinator) ListSettledMessages(context.Context, string) ([]message.Message, error) {
+	return nil, nil
+}
 
 var _ agent.Coordinator = (*streamScriptCoordinator)(nil)
 

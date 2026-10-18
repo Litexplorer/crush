@@ -338,3 +338,7 @@ func TestRouteChannelMessage_ConfigEnabled(t *testing.T) {
 	}
 	ws.runWG.Wait()
 }
+
+func (*recordingCoordinator) ListSettledMessages(context.Context, string) ([]message.Message, error) {
+	return nil, nil
+}

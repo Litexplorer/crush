@@ -117,6 +117,9 @@ func (c *scriptedCoordinator) Model() agent.Model                            { r
 func (c *scriptedCoordinator) UpdateModels(context.Context) error            { return nil }
 func (c *scriptedCoordinator) GenerateTitle(context.Context, string, string) {}
 func (c *scriptedCoordinator) SetMainAgent(string) error                     { return nil }
+func (c *scriptedCoordinator) ListSettledMessages(context.Context, string) ([]message.Message, error) {
+	return nil, nil
+}
 
 var _ agent.Coordinator = (*scriptedCoordinator)(nil)
 

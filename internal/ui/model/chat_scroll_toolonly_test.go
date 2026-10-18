@@ -33,8 +33,8 @@ func TestChat_ScrollToMessage_ToolOnlyMessage(t *testing.T) {
 	c.SetSize(100, 3) // small viewport so mid-list hits require scrolling
 
 	// A hit in the middle of the list: view must scroll off the top.
-	cmd := c.ScrollToMessage("a2")
-	require.NotNil(t, cmd, "ScrollToMessage by message ID must resolve tool-only messages")
+	c.ScrollToMessage("a2")
+	require.NotNil(t, c.EnsureScrollbarHide(), "ScrollToMessage by message ID must resolve tool-only messages")
 	require.True(t, c.list.Offset() > 0, "view must scroll off the top for a mid-list hit")
 	require.False(t, c.list.AtBottom(), "a mid-list hit must not leave the view pinned to the bottom")
 
@@ -46,5 +46,5 @@ func TestChat_ScrollToMessage_ToolOnlyMessage(t *testing.T) {
 	require.Equal(t, offsetBefore, c.list.Offset(), "SetSize must not reset the jump scroll position")
 
 	// Unknown message ID stays a no-op.
-	require.Nil(t, c.ScrollToMessage("nope"))
+	c.ScrollToMessage("nope")
 }
