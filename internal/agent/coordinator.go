@@ -1679,9 +1679,16 @@ func callTopK(providerCfg config.ProviderConfig, topK *int64) *int64 {
 // It creates a sub-session, runs the agent with the given prompt, and propagates
 // the cost to the parent session.
 func (c *coordinator) runSubAgent(ctx context.Context, params subAgentParams) (fantasy.ToolResponse, error) {
+	startedAt := time.Now()
+	// Use the first meaningful prompt line as the child session title so the
+	// parent UI can show a readable task name before title generation finishes.
+	title := subagentTaskTitle(params.Prompt)
+	if title == "" {
+		title = params.SessionTitle
+	}
 	// Create sub-session
 	agentToolSessionID := c.sessions.CreateAgentToolSessionID(params.AgentMessageID, params.ToolCallID)
-	session, err := c.sessions.CreateTaskSession(ctx, agentToolSessionID, params.SessionID, params.SessionTitle)
+	session, err := c.sessions.CreateTaskSession(ctx, agentToolSessionID, params.SessionID, title)
 	if err != nil {
 		return fantasy.ToolResponse{}, fmt.Errorf("create session: %w", err)
 	}
@@ -1729,7 +1736,8 @@ func (c *coordinator) runSubAgent(ctx context.Context, params subAgentParams) (f
 		})
 	}
 	if err != nil {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("Failed to generate response: %s", err)), nil
+		resp := fantasy.NewTextErrorResponse(fmt.Sprintf("Failed to generate response: %s", err))
+		return withSubagentMetadata(resp, session.ID, session.Title, model, time.Since(startedAt)), nil
 	}
 
 	// Update parent session cost on a best-effort basis. A failure here must
@@ -1745,9 +1753,43 @@ func (c *coordinator) runSubAgent(ctx context.Context, params subAgentParams) (f
 
 	output := subAgentOutput(result)
 	if output == "" {
-		return fantasy.NewTextErrorResponse("Sub-agent completed but produced no text output."), nil
+		resp := fantasy.NewTextErrorResponse("Sub-agent completed but produced no text output.")
+		return withSubagentMetadata(resp, session.ID, session.Title, model, time.Since(startedAt)), nil
 	}
-	return fantasy.NewTextResponse(output), nil
+	return withSubagentMetadata(fantasy.NewTextResponse(output), session.ID, session.Title, model, time.Since(startedAt)), nil
+}
+
+// subagentTaskTitle derives a concise child-session title from the task
+// prompt. It keeps the first meaningful line and drops common Markdown
+// prefixes so the parent card has something readable before title
+// generation completes.
+func subagentTaskTitle(prompt string) string {
+	for _, raw := range strings.Split(prompt, "\n") {
+		line := strings.TrimSpace(raw)
+		line = strings.TrimSpace(strings.TrimLeft(line, "#>*- "))
+		if line == "" {
+			continue
+		}
+		runes := []rune(line)
+		if len(runes) > 60 {
+			return string(runes[:60]) + "…"
+		}
+		return line
+	}
+	return ""
+}
+
+// withSubagentMetadata attaches the child session identity to the tool
+// result. The browser uses it to link the card to the sub-session without
+// relying on the internal messageID$$toolCallID convention.
+func withSubagentMetadata(resp fantasy.ToolResponse, sessionID, title string, model Model, duration time.Duration) fantasy.ToolResponse {
+	return fantasy.WithResponseMetadata(resp, map[string]any{
+		"session_id":  sessionID,
+		"title":       title,
+		"provider":    model.ModelCfg.Provider,
+		"model":       model.ModelCfg.Model,
+		"duration_ms": duration.Milliseconds(),
+	})
 }
 
 func subAgentOutput(result *fantasy.AgentResult) string {

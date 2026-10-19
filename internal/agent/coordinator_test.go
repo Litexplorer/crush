@@ -138,6 +138,11 @@ func TestRunSubAgent(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "done", resp.Content)
 		assert.False(t, resp.IsError)
+		assert.Contains(t, resp.Metadata, `"session_id":"msg-1$$call-1"`)
+		assert.Contains(t, resp.Metadata, `"title":"do something"`)
+		child, err := env.sessions.Get(t.Context(), "msg-1$$call-1")
+		require.NoError(t, err)
+		assert.Equal(t, "do something", child.Title)
 	})
 
 	t.Run("cost update failure preserves output", func(t *testing.T) {
