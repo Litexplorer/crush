@@ -157,6 +157,16 @@ func TestPermissionRequestParamsTypeAssertable(t *testing.T) {
 				require.Equal(t, "summarize this page", v.Prompt)
 			},
 		},
+		{
+			// MCP tools carry their input as a raw JSON string, so the
+			// permission grant round-trip must accept a string payload.
+			name:     "mcp tool string params",
+			toolName: "mcp_thin-proxy_list_servers",
+			params:   `{"query":"workspaces"}`,
+			assert: func(t *testing.T, got any) {
+				require.Equal(t, `{"query":"workspaces"}`, got)
+			},
+		},
 	}
 
 	for _, tc := range tests {

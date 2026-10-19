@@ -42,6 +42,15 @@ func TestResolveAttachments(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "x", string(got[0].Content))
 
+	// Directory attachments become a text tree listing the folder's entries.
+	writeFile("sub/inner.txt", "nested")
+	got, err = resolveAttachments(dir, []proto.Attachment{{FilePath: "sub"}})
+	require.NoError(t, err)
+	require.Equal(t, "sub/", got[0].FileName)
+	require.Equal(t, "text/plain", got[0].MimeType)
+	require.Contains(t, string(got[0].Content), "inner.txt")
+	require.Contains(t, string(got[0].Content), "Directory: ")
+
 	// Path escaping the workspace is rejected.
 	_, err = resolveAttachments(dir, []proto.Attachment{{FilePath: "../../etc/passwd"}})
 	require.Error(t, err)

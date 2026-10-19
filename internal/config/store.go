@@ -1244,6 +1244,16 @@ func NewTestStore(cfg *Config, loadedPaths ...string) *ConfigStore {
 	}
 }
 
+// NewTestStoreWithWorkingDir creates a ConfigStore for testing purposes
+// with an explicit working directory.
+func NewTestStoreWithWorkingDir(cfg *Config, workingDir string) *ConfigStore {
+	return &ConfigStore{
+		config:     cfg,
+		workingDir: workingDir,
+		resolver:   NewShellVariableResolver(env.New()),
+	}
+}
+
 // ImportCopilot attempts to import a GitHub Copilot token from disk.
 func (s *ConfigStore) ImportCopilot() (*oauth.Token, bool) {
 	if s.HasConfigField(ScopeGlobal, "providers.copilot.api_key") || s.HasConfigField(ScopeGlobal, "providers.copilot.oauth") {

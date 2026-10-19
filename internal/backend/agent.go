@@ -48,6 +48,9 @@ func (b *Backend) SendMessage(workspaceID string, msg proto.AgentMessage) error 
 		if attachments, err = resolveAttachments(ws.Cfg.WorkingDir(), msg.Attachments); err != nil {
 			return err
 		}
+		// Hand the resolved content to the dispatched run: runAgent reads
+		// msg.Attachments, so path-only references must be replaced in place.
+		msg.Attachments = attachments
 	}
 
 	if err := agent.ValidateCall(agent.SessionAgentCall{

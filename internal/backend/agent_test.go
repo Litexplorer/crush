@@ -3,6 +3,8 @@ package backend
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -10,6 +12,7 @@ import (
 	"charm.land/fantasy"
 	"github.com/charmbracelet/crush/internal/agent"
 	"github.com/charmbracelet/crush/internal/app"
+	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/message"
 	"github.com/charmbracelet/crush/internal/proto"
 	"github.com/google/uuid"
@@ -28,6 +31,10 @@ type blockingCoordinator struct {
 	setMainAgentErr  error
 	lastMainAgentSet atomic.Value
 	busy             bool
+
+	// gotAttachments records the attachments handed to RunAccepted so
+	// tests can assert what the dispatched run actually received.
+	gotAttachments []message.Attachment
 }
 
 func newBlockingCoordinator() *blockingCoordinator {
@@ -43,6 +50,7 @@ func (c *blockingCoordinator) Run(ctx context.Context, sessionID, prompt string,
 
 func (c *blockingCoordinator) RunAccepted(ctx context.Context, accept *agent.AcceptedRun, sessionID, prompt string, attachments ...message.Attachment) (*fantasy.AgentResult, error) {
 	c.runCount.Add(1)
+	c.gotAttachments = append([]message.Attachment(nil), attachments...)
 	select {
 	case c.entered <- struct{}{}:
 	default:
@@ -220,6 +228,42 @@ func TestSetMainAgent_PropagatesCoordinatorError(t *testing.T) {
 
 	err := b.SetMainAgent(ws.ID, "123")
 	require.ErrorIs(t, err, wantErr)
+}
+
+// TestSendMessage_ResolvesAttachmentsForDispatchedRun is a regression
+// test: path-only attachments are resolved from disk for validation but
+// the dispatched run used to receive the original, content-less slice.
+func TestSendMessage_ResolvesAttachmentsForDispatchedRun(t *testing.T) {
+	t.Parallel()
+	b, _ := newTestBackend(t)
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "shot.png"), []byte("png-bytes"), 0o600))
+
+	coord := newBlockingCoordinator()
+	ws := insertAgentWorkspace(t, b, coord)
+	ws.Cfg = config.NewTestStoreWithWorkingDir(&config.Config{}, dir)
+
+	err := b.SendMessage(ws.ID, proto.AgentMessage{
+		SessionID:   "S1",
+		Prompt:      "what is in this image?",
+		Attachments: []proto.Attachment{{FilePath: "shot.png"}},
+	})
+	require.NoError(t, err)
+
+	select {
+	case <-coord.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("dispatched goroutine never entered RunAccepted")
+	}
+
+	require.Len(t, coord.gotAttachments, 1)
+	require.Equal(t, []byte("png-bytes"), coord.gotAttachments[0].Content)
+	require.Equal(t, "image/png", coord.gotAttachments[0].MimeType)
+	require.Equal(t, "shot.png", coord.gotAttachments[0].FileName)
+
+	close(coord.release)
+	ws.runWG.Wait()
 }
 
 func (*blockingCoordinator) ListSettledMessages(context.Context, string) ([]message.Message, error) {

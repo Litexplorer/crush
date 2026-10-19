@@ -2,12 +2,21 @@ package backend
 
 import (
 	"fmt"
+	"io/fs"
 	"mime"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/crush/internal/proto"
+)
+
+// Directory attachments are rendered as a compact tree listing instead of
+// their binary content: the agent can orient itself and then read individual
+// files with its own tools.
+const (
+	maxDirectoryEntries = 500
+	maxDirectoryDepth   = 4
 )
 
 // withinRoot reports whether target is inside root (both absolute paths).
@@ -73,6 +82,22 @@ func resolveAttachments(root string, atts []proto.Attachment) ([]proto.Attachmen
 		if !withinRoot(root, full) {
 			return nil, fmt.Errorf("attachment path %q is outside the workspace", a.FilePath)
 		}
+		info, statErr := os.Stat(full)
+		if statErr != nil {
+			return nil, statErr
+		}
+		if info.IsDir() {
+			listing, err := directoryListing(full)
+			if err != nil {
+				return nil, err
+			}
+			out[i].Content = []byte(listing)
+			out[i].MimeType = "text/plain"
+			if out[i].FileName == "" {
+				out[i].FileName = filepath.Base(full) + "/"
+			}
+			continue
+		}
 		data, err := os.ReadFile(full)
 		if err != nil {
 			return nil, err
@@ -86,4 +111,59 @@ func resolveAttachments(root string, atts []proto.Attachment) ([]proto.Attachmen
 		}
 	}
 	return out, nil
+}
+
+// directoryListing walks a directory and renders a bounded, indented tree of
+// its entries. Unreadable children are skipped so one bad file does not make
+// the whole attachment fail.
+func directoryListing(root string) (string, error) {
+	var b strings.Builder
+	b.WriteString("Directory: " + root + "\n")
+	entries := 0
+	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if d != nil && d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if path == root {
+			return nil
+		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			return nil
+		}
+		depth := strings.Count(rel, string(os.PathSeparator)) + 1
+		if d.IsDir() && d.Name() == ".git" {
+			return filepath.SkipDir
+		}
+		if depth > maxDirectoryDepth {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entries >= maxDirectoryEntries {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		name := d.Name()
+		if d.IsDir() {
+			name += "/"
+		}
+		b.WriteString(strings.Repeat("  ", depth-1) + name + "\n")
+		entries++
+		return nil
+	})
+	if walkErr != nil {
+		return "", walkErr
+	}
+	if entries >= maxDirectoryEntries {
+		b.WriteString("... (listing truncated)\n")
+	}
+	b.WriteString("Use your file tools to read the contents of any entry above.\n")
+	return b.String(), nil
 }

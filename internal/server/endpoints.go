@@ -44,6 +44,16 @@ func (c *controllerV1) endpoints() []apigen.Endpoint {
 			Fails(400).
 			Handle(c.handleDeleteClient),
 
+		apigen.Get("/v1/fs/dirs").
+			Summary("List directories").
+			Description("Lists the subdirectories of an absolute path, powering "+
+				"live path completion in the web UI's Open project dialog.").
+			Tags("system").
+			QueryParam("path", "Absolute directory (default: home directory)").
+			Responds(proto.FsDirList{}).
+			Fails(400, 500).
+			Handle(c.handleGetFsDirs),
+
 		apigen.Get("/v1/workspaces").
 			Summary("List workspaces").
 			Tags("workspaces").
