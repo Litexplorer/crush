@@ -136,7 +136,7 @@ func modeState(m acpsdk.SessionModeId) *acpsdk.SessionModeState {
 // data directory passed to NewAgent.
 func (a *Agent) registryDataDir(ctx context.Context, cwd string) string {
 	if cwd != "" {
-		if store, err := config.Init(cwd, "", false); err == nil {
+		if store, err := config.Init(ctx, cwd, "", false); err == nil {
 			if dd := store.Config().Options.DataDirectory; dd != "" {
 				return dd
 			}

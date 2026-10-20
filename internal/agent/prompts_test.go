@@ -16,7 +16,7 @@ import (
 // crush://skills/ locations.
 func TestTaskPromptIncludesSkills(t *testing.T) {
 	workingDir := t.TempDir()
-	cfg, err := config.Init(workingDir, "", false)
+	cfg, err := config.Init(t.Context(), workingDir, "", false)
 	require.NoError(t, err)
 	// Keep the assertion deterministic regardless of the host's user config.
 	cfg.Config().Options.SkillsPaths = nil

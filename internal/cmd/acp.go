@@ -41,7 +41,7 @@ ND-JSON JSON-RPC, so it can be driven by ACP clients such as Zed.`,
 			return fmt.Errorf("failed to get debug flag: %v", err)
 		}
 
-		cfg, err := config.Load(config.GlobalWorkspaceDir(), dataDir, debug)
+		cfg, err := config.Load(cmd.Context(), config.GlobalWorkspaceDir(), dataDir, debug)
 		if err != nil {
 			return fmt.Errorf("failed to load configuration: %v", err)
 		}

@@ -88,11 +88,6 @@ func NewWriteTool(
 				return fantasy.ToolResponse{}, fmt.Errorf("error checking file: %w", err)
 			}
 
-			dir := filepath.Dir(filePath)
-			if err = os.MkdirAll(dir, 0o755); err != nil {
-				return fantasy.ToolResponse{}, fmt.Errorf("error creating directory: %w", err)
-			}
-
 			oldContent := ""
 			if fileInfo != nil && !fileInfo.IsDir() {
 				oldBytes, readErr := os.ReadFile(filePath)
@@ -140,14 +135,12 @@ func NewWriteTool(
 			// fall back to the local file system on client errors.
 			if fileClient != nil {
 				if err := fileClient.WriteTextFile(ctx, sessionID, filePath, params.Content); err != nil {
-					if werr := os.WriteFile(filePath, []byte(params.Content), 0o644); werr != nil {
-						return fantasy.ToolResponse{}, fmt.Errorf("error writing file: %w", werr)
+					if werr := writeFileWithParents(filePath, []byte(params.Content)); werr != nil {
+						return fantasy.ToolResponse{}, werr
 					}
 				}
-			} else {
-				if err := os.WriteFile(filePath, []byte(params.Content), 0o644); err != nil {
-					return fantasy.ToolResponse{}, fmt.Errorf("error writing file: %w", err)
-				}
+			} else if err = writeFileWithParents(filePath, []byte(params.Content)); err != nil {
+				return fantasy.ToolResponse{}, err
 			}
 
 			// Check if file exists in history
@@ -189,4 +182,25 @@ func NewWriteTool(
 			), nil
 		},
 	)
+}
+
+// ensureParentDir creates the parent directories of path. Call it only
+// after the user has granted permission to write path.
+func ensureParentDir(path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("failed to create parent directories: %w", err)
+	}
+	return nil
+}
+
+// writeFileWithParents writes data to path, creating any missing parent
+// directories. Call it only after write permission has been granted.
+func writeFileWithParents(path string, data []byte) error {
+	if err := ensureParentDir(path); err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
+	return nil
 }
