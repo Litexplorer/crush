@@ -31,6 +31,15 @@ type Workspace struct {
 	Skills []SkillState `json:"skills,omitempty"`
 }
 
+// Project is a workspace directory remembered across server restarts.
+// Unlike Workspace it carries no live process state, so a client can
+// list known projects and rebuild a workspace on demand.
+type Project struct {
+	Path         string    `json:"path"`
+	DataDir      string    `json:"data_dir"`
+	LastAccessed time.Time `json:"last_accessed"`
+}
+
 // Error represents an error response.
 type Error struct {
 	Message string `json:"message"`

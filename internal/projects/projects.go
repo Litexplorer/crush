@@ -95,6 +95,24 @@ func Register(workingDir, dataDir string) error {
 	return Save(list)
 }
 
+// Remove deletes a project from the list by its working directory.
+func Remove(workingDir string) error {
+	list, err := Load()
+	if err != nil {
+		return err
+	}
+
+	before := len(list.Projects)
+	list.Projects = slices.DeleteFunc(list.Projects, func(p Project) bool {
+		return p.Path == workingDir
+	})
+	if len(list.Projects) == before {
+		return nil
+	}
+
+	return Save(list)
+}
+
 // List returns all tracked projects, most recently registered first.
 func List() ([]Project, error) {
 	list, err := Load()

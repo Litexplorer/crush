@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/crush/internal/csync"
+	"github.com/charmbracelet/crush/internal/projects"
 	"github.com/charmbracelet/crush/internal/proto"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -418,6 +419,42 @@ func TestPathDedupe_FullCreate(t *testing.T) {
 	require.Contains(t, wsA.clients, cidA)
 	require.Contains(t, wsA.clients, cidB)
 	wsA.clientsMu.Unlock()
+}
+
+// TestCreateWorkspace_RegistersProject verifies a workspace created
+// through the backend is remembered on disk, so a client can
+// rediscover it after the server restarts.
+func TestCreateWorkspace_RegistersProject(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("CRUSH_GLOBAL_DATA", t.TempDir())
+
+	cwd := t.TempDir()
+	dataDir := t.TempDir()
+
+	b := New(context.Background(), nil, func() {})
+	b.SetCreateGrace(2 * time.Second)
+	t.Cleanup(func() { drainBackend(t, b) })
+
+	_, _, err := b.CreateWorkspace(protoWS(cwd, dataDir, uuid.New().String()))
+	require.NoError(t, err)
+
+	list, err := projects.List()
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	require.Equal(t, cwd, list[0].Path)
+	require.Equal(t, dataDir, list[0].DataDir)
+
+	// A second create at the same path refreshes the entry instead of
+	// appending a duplicate.
+	_, _, err = b.CreateWorkspace(protoWS(cwd, dataDir, uuid.New().String()))
+	require.NoError(t, err)
+
+	list, err = projects.List()
+	require.NoError(t, err)
+	require.Len(t, list, 1)
 }
 
 // TestPathDedupe_DifferentPaths_DifferentWorkspaces confirms that two

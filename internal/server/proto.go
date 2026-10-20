@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/charmbracelet/crush/internal/backend"
+	"github.com/charmbracelet/crush/internal/projects"
 	"github.com/charmbracelet/crush/internal/proto"
 	"github.com/charmbracelet/crush/internal/session"
 	"github.com/google/uuid"
@@ -62,6 +63,45 @@ func (c *controllerV1) handleGetConfig(w http.ResponseWriter, _ *http.Request) {
 // handleGetWorkspaces lists all workspaces.
 func (c *controllerV1) handleGetWorkspaces(w http.ResponseWriter, _ *http.Request) {
 	jsonEncode(w, c.backend.ListWorkspaces())
+}
+
+// handleGetProjects lists the project directories remembered on disk.
+// Unlike workspaces these outlive the process, so a client can rebuild a
+// workspace from the list after the server restarts.
+func (c *controllerV1) handleGetProjects(w http.ResponseWriter, r *http.Request) {
+	list, err := projects.List()
+	if err != nil {
+		c.server.logError(r, "Failed to list projects", "error", err)
+		jsonError(w, http.StatusInternalServerError, "failed to list projects")
+		return
+	}
+
+	out := make([]proto.Project, 0, len(list))
+	for _, p := range list {
+		out = append(out, proto.Project{
+			Path:         p.Path,
+			DataDir:      p.DataDir,
+			LastAccessed: p.LastAccessed,
+		})
+	}
+	jsonEncode(w, out)
+}
+
+// handleDeleteProjects forgets a project directory. Its data directory
+// is left untouched.
+func (c *controllerV1) handleDeleteProjects(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		jsonError(w, http.StatusBadRequest, "path is required")
+		return
+	}
+
+	if err := projects.Remove(path); err != nil {
+		c.server.logError(r, "Failed to remove project", "path", path, "error", err)
+		jsonError(w, http.StatusInternalServerError, "failed to remove project")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleGetWorkspace returns a single workspace by ID.

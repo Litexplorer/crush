@@ -60,6 +60,25 @@ func (c *controllerV1) endpoints() []apigen.Endpoint {
 			Responds([]proto.Workspace{}).
 			Handle(c.handleGetWorkspaces),
 
+		apigen.Get("/v1/projects").
+			Summary("List known projects").
+			Description("Lists project directories remembered on disk. They " +
+				"outlive workspaces, which are process-local, so a client can " +
+				"rebuild a workspace from this list after a server restart.").
+			Tags("projects").
+			Responds([]proto.Project{}).
+			Fails(500).
+			Handle(c.handleGetProjects),
+
+		apigen.Delete("/v1/projects").
+			Summary("Forget a project").
+			Description("Removes a project from the on-disk project list. Its "+
+				"data directory is left untouched.").
+			Tags("projects").
+			QueryParam("path", "Absolute project path").
+			Fails(400, 500).
+			Handle(c.handleDeleteProjects),
+
 		apigen.Post("/v1/workspaces").
 			Summary("Create workspace").
 			Tags("workspaces").

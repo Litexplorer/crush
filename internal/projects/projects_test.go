@@ -211,3 +211,49 @@ func TestRegisterOrdersByRecency(t *testing.T) {
 		t.Fatalf("Expected order %v, got %v", want, got)
 	}
 }
+
+func TestRemove(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("CRUSH_GLOBAL_DATA", filepath.Join(tmpDir, "crush"))
+
+	for _, path := range []string{"/p1", "/p2"} {
+		if err := Register(path, path+"/.crush"); err != nil {
+			t.Fatalf("Register failed: %v", err)
+		}
+	}
+
+	if err := Remove("/p1"); err != nil {
+		t.Fatalf("Remove failed: %v", err)
+	}
+
+	projects, err := List()
+	if err != nil {
+		t.Fatalf("List failed: %v", err)
+	}
+	if len(projects) != 1 || projects[0].Path != "/p2" {
+		t.Fatalf("Expected only /p2, got %+v", projects)
+	}
+}
+
+func TestRemoveUnknownPathIsNoop(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("CRUSH_GLOBAL_DATA", filepath.Join(tmpDir, "crush"))
+
+	if err := Register("/p1", "/p1/.crush"); err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
+
+	if err := Remove("/missing"); err != nil {
+		t.Fatalf("Remove of unknown path should not fail: %v", err)
+	}
+
+	projects, err := List()
+	if err != nil {
+		t.Fatalf("List failed: %v", err)
+	}
+	if len(projects) != 1 {
+		t.Fatalf("Expected the existing project to survive, got %+v", projects)
+	}
+}

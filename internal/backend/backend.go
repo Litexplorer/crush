@@ -19,6 +19,7 @@ import (
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/csync"
 	"github.com/charmbracelet/crush/internal/db"
+	"github.com/charmbracelet/crush/internal/projects"
 	"github.com/charmbracelet/crush/internal/proto"
 	"github.com/charmbracelet/crush/internal/skills"
 	"github.com/charmbracelet/crush/internal/ui/util"
@@ -396,6 +397,7 @@ func (b *Backend) CreateWorkspace(args proto.Workspace) (*Workspace, proto.Works
 			logFirstWinsMismatch(ws, args)
 			b.registerClient(ws, clientID)
 			b.mu.Unlock()
+			registerProject(ws.Path, ws.Cfg.Config().Options.DataDirectory)
 			return ws, workspaceToProto(ws), nil
 		}
 		// pathIndex referenced a workspace that has since been
@@ -504,6 +506,7 @@ func (b *Backend) CreateWorkspace(args proto.Workspace) (*Workspace, proto.Works
 			b.registerClient(existing, clientID)
 			b.mu.Unlock()
 			ws.invokeShutdown()
+			registerProject(existing.Path, existing.Cfg.Config().Options.DataDirectory)
 			return existing, workspaceToProto(existing), nil
 		}
 		delete(b.pathIndex, key)
@@ -515,6 +518,11 @@ func (b *Backend) CreateWorkspace(args proto.Workspace) (*Workspace, proto.Works
 	// moment it appears in the index.
 	b.registerClient(ws, clientID)
 	b.mu.Unlock()
+
+	// Record the project on disk so clients can rediscover it after a
+	// server restart. Done outside b.mu because it touches the
+	// filesystem.
+	registerProject(args.Path, cfg.Config().Options.DataDirectory)
 
 	if args.Version != "" && args.Version != version.Version {
 		slog.Warn(
@@ -1115,6 +1123,16 @@ func validateClientID(id string) (string, error) {
 		return "", fmt.Errorf("%w: %v", ErrInvalidClientID, err)
 	}
 	return id, nil
+}
+
+// registerProject records a workspace path in the on-disk project list
+// so it can be rediscovered after the server restarts. Failures are
+// logged, never fatal: a workspace must remain usable even when the
+// global data directory is read-only.
+func registerProject(path, dataDir string) {
+	if err := projects.Register(path, dataDir); err != nil {
+		slog.Warn("Failed to register project", "path", path, "error", err)
+	}
 }
 
 func workspaceToProto(ws *Workspace) proto.Workspace {
