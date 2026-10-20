@@ -1,12 +1,14 @@
 package backend
 
 import (
+	"bytes"
 	"fmt"
 	"io/fs"
 	"mime"
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/crush/internal/proto"
 )
@@ -75,7 +77,9 @@ func resolveAttachments(root string, atts []proto.Attachment) ([]proto.Attachmen
 	out := make([]proto.Attachment, len(atts))
 	for i, a := range atts {
 		out[i] = a
-		if a.Content != nil || a.FilePath == "" {
+		// 用长度而非 nil 判定：JSON 里缺省的 content 会被 base64 解码成空但非 nil 的切片，
+		// 用 a.Content != nil 会把「只有路径」的引用当成已带内容而跳过读取
+		if len(a.Content) > 0 || a.FilePath == "" {
 			continue
 		}
 		full := filepath.Join(root, filepath.Clean(a.FilePath))
@@ -106,11 +110,42 @@ func resolveAttachments(root string, atts []proto.Attachment) ([]proto.Attachmen
 		if out[i].FileName == "" {
 			out[i].FileName = filepath.Base(a.FilePath)
 		}
-		if out[i].MimeType == "" {
-			out[i].MimeType = mime.TypeByExtension(filepath.Ext(a.FilePath))
-		}
+		// 按内容而非扩展名判类型：.json/.yaml/.tsx 等扩展名推不出 text/*，
+		// 而提示词合并只接受 text/*，一旦类型失配内容会被静默丢弃
+		out[i].MimeType = attachmentMimeType(a.FilePath, data)
 	}
 	return out, nil
+}
+
+// attachmentMimeType picks the type the agent uses to consume an attachment.
+// Images keep their image type so they stay image parts; anything that decodes
+// as UTF-8 text is labelled text/plain so its content is folded into the
+// prompt. Extension-based types such as application/json would otherwise be
+// dropped by the text-only prompt merge.
+func attachmentMimeType(path string, data []byte) string {
+	kind := mime.TypeByExtension(filepath.Ext(path))
+	if strings.HasPrefix(kind, "image/") {
+		return kind
+	}
+	if isTextData(data) {
+		return "text/plain; charset=utf-8"
+	}
+	if kind == "" {
+		return "application/octet-stream"
+	}
+	return kind
+}
+
+// isTextData reports whether data can be treated as UTF-8 text: no NUL bytes
+// and valid UTF-8. Empty files count as text so the agent still sees the path.
+func isTextData(data []byte) bool {
+	if len(data) == 0 {
+		return true
+	}
+	if bytes.IndexByte(data, 0) >= 0 {
+		return false
+	}
+	return utf8.Valid(data)
 }
 
 // directoryListing walks a directory and renders a bounded, indented tree of

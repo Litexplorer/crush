@@ -55,3 +55,37 @@ func TestResolveAttachments(t *testing.T) {
 	_, err = resolveAttachments(dir, []proto.Attachment{{FilePath: "../../etc/passwd"}})
 	require.Error(t, err)
 }
+
+// Attachments are typed by content, not by extension: extension-based types
+// such as application/json or "" (for .tsx/.toml) would be dropped by the
+// text-only prompt merge, so every UTF-8 file must arrive as text/plain.
+func TestResolveAttachments_TextMimeByContent(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name string, data []byte) {
+		p := filepath.Join(dir, name)
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		require.NoError(t, os.WriteFile(p, data, 0o644))
+	}
+	write("config.json", []byte(`{"a":1}`))
+	write("deploy.yaml", []byte("a: 1\n"))
+	write("app.tsx", []byte("export const a = 1\n"))
+	write("Cargo.toml", []byte("[package]\n"))
+	write(".env", []byte("A=1\n"))
+	write("blob.bin", []byte{0x00, 0x01, 0x02})
+	write("image.png", append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 32)...))
+
+	tests := map[string]string{
+		"config.json": "text/plain; charset=utf-8",
+		"deploy.yaml": "text/plain; charset=utf-8",
+		"app.tsx":     "text/plain; charset=utf-8",
+		"Cargo.toml":  "text/plain; charset=utf-8",
+		".env":        "text/plain; charset=utf-8",
+		"blob.bin":    "application/octet-stream",
+		"image.png":   "image/png",
+	}
+	for name, want := range tests {
+		got, err := resolveAttachments(dir, []proto.Attachment{{FilePath: name}})
+		require.NoError(t, err)
+		require.Equal(t, want, got[0].MimeType, name)
+	}
+}

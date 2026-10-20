@@ -698,6 +698,11 @@ func (a *Attachment) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
 	}
+	// 空载荷表示客户端只提供了路径（@ 引用）：保持 nil，让服务端据此读取文件内容
+	if aux.Content == "" {
+		a.Content = nil
+		return nil
+	}
 	content, err := base64.StdEncoding.DecodeString(aux.Content)
 	if err != nil {
 		return err
