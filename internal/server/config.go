@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 
 	"github.com/charmbracelet/crush/internal/proto"
 )
@@ -191,7 +192,14 @@ func (c *controllerV1) handleGetWorkspaceSkills(w http.ResponseWriter, r *http.R
 func (c *controllerV1) handleGetWorkspaceFiles(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	dir := r.URL.Query().Get("path")
-	entries, err := c.backend.ListWorkspaceFiles(id, dir)
+	// depth 缺省或非法时回落到单层列表；上限由 backend 收敛，避免客户端放大遍历成本
+	depth := 1
+	if raw := r.URL.Query().Get("depth"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 1 {
+			depth = parsed
+		}
+	}
+	entries, err := c.backend.ListWorkspaceFiles(id, dir, depth)
 	if err != nil {
 		c.handleError(w, r, err)
 		return

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/charmbracelet/crush/internal/fsext"
 	"github.com/charmbracelet/crush/internal/proto"
 )
 
@@ -19,6 +20,13 @@ import (
 const (
 	maxDirectoryEntries = 500
 	maxDirectoryDepth   = 4
+)
+
+// Recursive workspace listings are capped so a large monorepo cannot flood the
+// browser with tens of thousands of entries in one response.
+const (
+	maxFileListEntries = 5000
+	maxFileListDepth   = 8
 )
 
 // withinRoot reports whether target is inside root (both absolute paths).
@@ -32,8 +40,10 @@ func withinRoot(root, target string) bool {
 
 // ListWorkspaceFiles lists files and directories under the workspace working
 // directory. dir is a relative path ("" = root); it must stay within the
-// working directory. Powers the `@` mention file picker (US-31).
-func (b *Backend) ListWorkspaceFiles(workspaceID, dir string) ([]proto.FileEntry, error) {
+// working directory. depth 1 lists a single level (the original behavior);
+// depth > 1 walks that many levels and returns a flat list so the `@` mention
+// picker can search nested files. Powers the `@` mention file picker (US-31).
+func (b *Backend) ListWorkspaceFiles(workspaceID, dir string, depth int) ([]proto.FileEntry, error) {
 	root, err := b.GetWorkingDir(workspaceID)
 	if err != nil {
 		return nil, err
@@ -44,6 +54,12 @@ func (b *Backend) ListWorkspaceFiles(workspaceID, dir string) ([]proto.FileEntry
 	}
 	if !withinRoot(root, target) {
 		return nil, fmt.Errorf("path %q is outside the workspace", dir)
+	}
+	if depth > maxFileListDepth {
+		depth = maxFileListDepth
+	}
+	if depth > 1 {
+		return listWorkspaceFilesRecursive(root, target, depth)
 	}
 	entries, err := os.ReadDir(target)
 	if err != nil {
@@ -61,6 +77,31 @@ func (b *Backend) ListWorkspaceFiles(workspaceID, dir string) ([]proto.FileEntry
 			Path:  rel,
 			IsDir: e.IsDir(),
 			Size:  size,
+		})
+	}
+	return out, nil
+}
+
+// listWorkspaceFilesRecursive walks target up to depth levels and returns a
+// flat, workspace-relative listing. Directory entries are reported with
+// IsDir; their Size stays zero because a recursive walk does not stat files.
+func listWorkspaceFilesRecursive(root, target string, depth int) ([]proto.FileEntry, error) {
+	paths, _, err := fsext.ListDirectory(target, nil, depth, maxFileListEntries)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]proto.FileEntry, 0, len(paths))
+	for _, path := range paths {
+		isDir := strings.HasSuffix(path, string(filepath.Separator))
+		cleanPath := strings.TrimSuffix(path, string(filepath.Separator))
+		rel, relErr := filepath.Rel(root, cleanPath)
+		if relErr != nil || rel == "." || strings.HasPrefix(rel, "..") {
+			continue
+		}
+		out = append(out, proto.FileEntry{
+			Name:  filepath.Base(cleanPath),
+			Path:  filepath.ToSlash(rel),
+			IsDir: isDir,
 		})
 	}
 	return out, nil

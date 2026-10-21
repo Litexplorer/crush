@@ -89,3 +89,62 @@ func TestResolveAttachments_TextMimeByContent(t *testing.T) {
 		require.Equal(t, want, got[0].MimeType, name)
 	}
 }
+
+// listWorkspaceFilesRecursive powers the recursive `@` file picker: it walks
+// the tree and returns a flat list of workspace-relative paths.
+func TestListWorkspaceFilesRecursive(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	write := func(rel, content string) {
+		p := filepath.Join(dir, rel)
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		require.NoError(t, os.WriteFile(p, []byte(content), 0o644))
+	}
+	write("a.txt", "a")
+	write("sub/b.txt", "b")
+	write("sub/deep/c.go", "c")
+	write("keep/d.txt", "d")
+
+	entries, err := listWorkspaceFilesRecursive(dir, dir, 3)
+	require.NoError(t, err)
+
+	paths := make([]string, 0, len(entries))
+	dirs := make(map[string]bool, len(entries))
+	for _, entry := range entries {
+		paths = append(paths, entry.Path)
+		dirs[entry.Path] = entry.IsDir
+	}
+	require.ElementsMatch(t, []string{
+		"a.txt",
+		"sub",
+		"sub/b.txt",
+		"sub/deep",
+		"sub/deep/c.go",
+		"keep",
+		"keep/d.txt",
+	}, paths)
+	require.True(t, dirs["sub"])
+	require.True(t, dirs["sub/deep"])
+	require.False(t, dirs["a.txt"])
+
+	// A shallower walk must stop before the deepest file.
+	shallow, err := listWorkspaceFilesRecursive(dir, dir, 2)
+	require.NoError(t, err)
+	shallowPaths := make([]string, 0, len(shallow))
+	for _, entry := range shallow {
+		shallowPaths = append(shallowPaths, entry.Path)
+	}
+	require.Contains(t, shallowPaths, "sub/b.txt")
+	require.NotContains(t, shallowPaths, "sub/deep/c.go")
+
+	// A subdirectory walk yields paths relative to the workspace root, not to
+	// the subdirectory, so the frontend can keep a single path convention.
+	fromSub, err := listWorkspaceFilesRecursive(dir, filepath.Join(dir, "sub"), 2)
+	require.NoError(t, err)
+	fromSubPaths := make([]string, 0, len(fromSub))
+	for _, entry := range fromSub {
+		fromSubPaths = append(fromSubPaths, entry.Path)
+	}
+	require.ElementsMatch(t, []string{"sub/b.txt", "sub/deep", "sub/deep/c.go"}, fromSubPaths)
+}

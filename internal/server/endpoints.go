@@ -116,10 +116,12 @@ func (c *controllerV1) endpoints() []apigen.Endpoint {
 		apigen.Get("/v1/workspaces/{id}/files").
 			Summary("List workspace files").
 			Description("Lists files and directories under the workspace working directory, "+
-				"powering the @ mention file picker.").
+				"powering the @ mention file picker. depth 1 lists a single level; "+
+				"depth > 1 walks that many levels and returns a flat listing.").
 			Tags("workspaces").
 			PathParam("id", "Workspace ID").
 			QueryParam("path", "Relative directory (default root)").
+			QueryParam("depth", "Levels to walk; 1 = single level (default), max 8").
 			Responds([]proto.FileEntry{}).
 			Fails(404, 500).
 			Handle(c.handleGetWorkspaceFiles),
