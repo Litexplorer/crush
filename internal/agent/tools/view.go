@@ -70,6 +70,12 @@ type ViewResponseMetadata struct {
 	ResourceType        ViewResourceType `json:"resource_type,omitempty"`
 	ResourceName        string           `json:"resource_name,omitempty"`
 	ResourceDescription string           `json:"resource_description,omitempty"`
+	// 图片专用：下发尺寸与体积，以及缩放前的原始体积，前端据此直接标注，
+	// 不必等图片解码完成再量尺寸
+	ImageWidth    int `json:"image_width,omitempty"`
+	ImageHeight   int `json:"image_height,omitempty"`
+	ImageBytes    int `json:"image_bytes,omitempty"`
+	OriginalBytes int `json:"original_bytes,omitempty"`
 }
 
 const (
@@ -231,10 +237,6 @@ func NewViewTool(
 
 			isSupportedImage, mimeType := getImageMimeType(filePath)
 			if isSupportedImage {
-				if fileInfo.Size() > MaxViewSize {
-					return fantasy.NewTextErrorResponse(fmt.Sprintf("Image file is too large (%d bytes). Maximum size is %d bytes",
-						fileInfo.Size(), MaxViewSize)), nil
-				}
 				if !GetSupportsImagesFromContext(ctx) {
 					return UnsupportedMediaResponse(GetModelNameFromContext(ctx)), nil
 				}
@@ -252,7 +254,23 @@ func NewViewTool(
 				// it identifies a supported image format.
 				mimeType = sniffImageMimeType(imageData, mimeType)
 
-				return fantasy.NewImageResponse(imageData, mimeType), nil
+				// 超过体积/尺寸上限的图片不再直接拒绝：缩到模型友好的尺寸后下发，
+				// 并在文本里写明原图信息，让模型知道它看到的是压缩版本
+				normalized, normErr := normalizeImageForModel(imageData, mimeType)
+				if normErr != nil {
+					return fantasy.NewTextErrorResponse(normErr.Error()), nil
+				}
+
+				resp := fantasy.NewImageResponse(normalized.Data, normalized.MIMEType)
+				resp.Content = normalized.describe()
+				filetracker.RecordRead(ctx, sessionID, filePath)
+				return fantasy.WithResponseMetadata(resp, ViewResponseMetadata{
+					FilePath:      filePath,
+					ImageWidth:    normalized.Width,
+					ImageHeight:   normalized.Height,
+					ImageBytes:    len(normalized.Data),
+					OriginalBytes: normalized.OriginalBytes,
+				}), nil
 			}
 
 			// Read the file content
