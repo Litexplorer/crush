@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/charmbracelet/crush/internal/backend"
 	"github.com/charmbracelet/crush/internal/projects"
@@ -401,6 +402,38 @@ func (c *controllerV1) handlePutWorkspaceSession(w http.ResponseWriter, r *http.
 	}
 
 	saved, err := c.backend.SaveSession(r.Context(), id, sess)
+	if err != nil {
+		c.handleError(w, r, err)
+		return
+	}
+	ws, _ := c.backend.GetWorkspace(id)
+	out := sessionToProto(saved)
+	out.IsBusy = isSessionBusy(ws, saved.ID)
+	out.AttachedClients = attachedClients(ws, saved.ID)
+	jsonEncode(w, out)
+}
+
+// handlePutWorkspaceSessionTitle renames a session. It only carries the
+// title, so usage counters, cost and todos are never overwritten — unlike
+// handlePutWorkspaceSession, which replaces the whole row.
+func (c *controllerV1) handlePutWorkspaceSessionTitle(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	sid := r.PathValue("sid")
+
+	var req proto.SessionTitleRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		c.server.logError(r, "Failed to decode request", "error", err)
+		jsonError(w, http.StatusBadRequest, "failed to decode request")
+		return
+	}
+	// 空标题会让前端到处回落 "Untitled"，直接拒掉
+	title := strings.TrimSpace(req.Title)
+	if title == "" {
+		jsonError(w, http.StatusBadRequest, "title is required")
+		return
+	}
+
+	saved, err := c.backend.RenameSession(r.Context(), id, sid, title)
 	if err != nil {
 		c.handleError(w, r, err)
 		return

@@ -106,6 +106,21 @@ func (b *Backend) SaveSession(ctx context.Context, workspaceID string, sess sess
 	return ws.Sessions.Save(ctx, sess)
 }
 
+// RenameSession updates only a session's title. Unlike SaveSession it leaves
+// usage counters, todos and updated_at alone, so renaming never reorders the
+// session list nor disturbs a running agent's bookkeeping.
+func (b *Backend) RenameSession(ctx context.Context, workspaceID, sessionID, title string) (session.Session, error) {
+	ws, err := b.GetWorkspace(workspaceID)
+	if err != nil {
+		return session.Session{}, err
+	}
+
+	if err := ws.Sessions.Rename(ctx, sessionID, title); err != nil {
+		return session.Session{}, err
+	}
+	return ws.Sessions.Get(ctx, sessionID)
+}
+
 // MCPServersDisabled returns the MCP servers disabled for the given
 // workspace's repository.
 func (b *Backend) MCPServersDisabled(ctx context.Context, workspaceID string) ([]string, error) {

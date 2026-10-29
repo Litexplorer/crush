@@ -194,6 +194,19 @@ func (c *controllerV1) endpoints() []apigen.Endpoint {
 			Fails(400, 404, 500).
 			Handle(c.handlePutWorkspaceSession),
 
+		apigen.Put("/v1/workspaces/{id}/sessions/{sid}/title").
+			Summary("Rename session").
+			Description("Updates only the title. Usage counters, cost, todos and "+
+				"updated_at are left untouched, so a rename never reorders the "+
+				"session list or clobbers a running agent's bookkeeping.").
+			Tags("sessions").
+			PathParam("id", "Workspace ID").
+			PathParam("sid", "Session ID").
+			Accepts(proto.SessionTitleRequest{}).
+			Responds(proto.Session{}).
+			Fails(400, 404, 500).
+			Handle(c.handlePutWorkspaceSessionTitle),
+
 		apigen.Delete("/v1/workspaces/{id}/sessions/{sid}").
 			Summary("Delete session").
 			Tags("sessions").

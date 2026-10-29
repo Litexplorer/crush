@@ -31,6 +31,12 @@ type Session struct {
 	AttachedClients  int     `json:"attached_clients"`
 }
 
+// SessionTitleRequest is the body of the rename endpoint. Only the title is
+// carried so a rename cannot overwrite usage counters, todos or cost.
+type SessionTitleRequest struct {
+	Title string `json:"title"`
+}
+
 // Todo represents a single todo entry on a session in the proto layer.
 type Todo struct {
 	Content    string `json:"content"`
