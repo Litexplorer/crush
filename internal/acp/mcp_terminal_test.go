@@ -237,7 +237,7 @@ func (errTerminalRunner) RunTerminal(context.Context, string, string, []string, 
 }
 
 func TestTerminalTool(t *testing.T) {
-	perms := permission.NewPermissionService(t.TempDir(), true, nil)
+	perms := permission.NewPermissionService(t.TempDir(), nil, nil)
 	ctx := context.WithValue(context.Background(), tools.SessionIDContextKey, "s1")
 
 	run := func(tool fantasy.AgentTool, command string) fantasy.ToolResponse {

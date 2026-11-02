@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/crush/internal/agent"
 	"github.com/charmbracelet/crush/internal/app"
 	"github.com/charmbracelet/crush/internal/message"
+	"github.com/charmbracelet/crush/internal/proto"
 	acpsdk "github.com/coder/acp-go-sdk"
 	"github.com/stretchr/testify/require"
 )
@@ -104,9 +105,14 @@ func (c *scriptedCoordinator) RunAccepted(ctx context.Context, _ *agent.Accepted
 	return c.Run(ctx, sessionID, prompt, attachments...)
 }
 
-func (c *scriptedCoordinator) BeginAccepted(string) *agent.AcceptedRun       { return nil }
-func (c *scriptedCoordinator) Cancel(string)                                 {}
-func (c *scriptedCoordinator) CancelAll()                                    {}
+func (c *scriptedCoordinator) BeginAccepted(string) *agent.AcceptedRun { return nil }
+func (c *scriptedCoordinator) Cancel(string)                           {}
+func (c *scriptedCoordinator) CancelAll()                              {}
+func (c *scriptedCoordinator) AddNote(string, string)                  {}
+func (c *scriptedCoordinator) SetHostContext(proto.HostContext)        {}
+func (c *scriptedCoordinator) HostContext() proto.HostContext {
+	return proto.HostContext{}
+}
 func (c *scriptedCoordinator) IsSessionBusy(string) bool                     { return false }
 func (c *scriptedCoordinator) IsBusy() bool                                  { return false }
 func (c *scriptedCoordinator) QueuedPrompts(string) int                      { return 0 }

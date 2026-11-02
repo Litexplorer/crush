@@ -13,6 +13,7 @@ import (
 	"charm.land/fantasy"
 	"github.com/charmbracelet/crush/internal/filetracker"
 	"github.com/charmbracelet/crush/internal/permission"
+	"github.com/charmbracelet/crush/internal/permission/testutil"
 	"github.com/charmbracelet/crush/internal/pubsub"
 	"github.com/stretchr/testify/require"
 )
@@ -191,38 +192,6 @@ func TestReadTextFileAllowsExactMaxContentSize(t *testing.T) {
 	require.False(t, hasMore)
 }
 
-type mockViewPermissionService struct {
-	*pubsub.Broker[permission.PermissionRequest]
-}
-
-func (m *mockViewPermissionService) Request(ctx context.Context, req permission.CreatePermissionRequest) (bool, error) {
-	return true, nil
-}
-
-func (m *mockViewPermissionService) Grant(req permission.PermissionRequest) bool { return true }
-
-func (m *mockViewPermissionService) Deny(req permission.PermissionRequest) bool { return true }
-
-func (m *mockViewPermissionService) GrantPersistent(req permission.PermissionRequest) bool {
-	return true
-}
-
-func (m *mockViewPermissionService) AutoApproveSession(sessionID string) {}
-
-func (m *mockViewPermissionService) ActiveRequest() (permission.PermissionRequest, bool) {
-	return permission.PermissionRequest{}, false
-}
-
-func (m *mockViewPermissionService) SetSkipRequests(skip bool) {}
-
-func (m *mockViewPermissionService) SkipRequests() bool {
-	return false
-}
-
-func (m *mockViewPermissionService) SubscribeNotifications(ctx context.Context) <-chan pubsub.Event[permission.PermissionNotification] {
-	return make(<-chan pubsub.Event[permission.PermissionNotification])
-}
-
 type mockFileTracker struct{}
 
 func (m mockFileTracker) RecordRead(ctx context.Context, sessionID, path string) {}
@@ -236,7 +205,7 @@ func (m mockFileTracker) ListReadFiles(ctx context.Context, sessionID string) ([
 }
 
 func newViewToolForTest(workingDir string) fantasy.AgentTool {
-	permissions := &mockViewPermissionService{Broker: pubsub.NewBroker[permission.PermissionRequest]()}
+	permissions := &testutil.MockPermissionService{Broker: pubsub.NewBroker[permission.PermissionRequest]()}
 	return NewViewTool(nil, permissions, mockFileTracker{}, nil, workingDir, nil)
 }
 

@@ -55,8 +55,9 @@ func NewTodosTool(sessions session.Service) fantasy.AgentTool {
 				oldStatusByContent[todo.Content] = todo.Status
 			}
 
+			// 树形待办的结构校验：状态取值、内容非空、内容唯一、父节点存在且不自指
 			if err := validateTodos(params.Todos); err != nil {
-				return fantasy.ToolResponse{}, err
+				return fantasy.NewTextErrorResponse(err.Error()), nil
 			}
 
 			todos := make([]session.Todo, len(params.Todos))
@@ -147,7 +148,7 @@ func validateTodos(items []TodoItem) error {
 		switch item.Status {
 		case "pending", "in_progress", "completed":
 		default:
-			return fmt.Errorf("invalid status %q for todo %q", item.Status, item.Content)
+			return fmt.Errorf("Invalid status %q for todo %q (must be pending, in_progress, or completed)", item.Status, item.Content)
 		}
 		if item.Content == "" {
 			return fmt.Errorf("todo content must not be empty")

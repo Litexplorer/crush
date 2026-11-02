@@ -200,7 +200,7 @@ func TestWriteToolPrefersClientWrite(t *testing.T) {
 	a, sess, _, cap, cwd := permissionEnv(t)
 	a.setClientCapabilities(acpsdk.ClientCapabilities{Fs: acpsdk.FileSystemCapabilities{WriteTextFile: true}})
 	// Skip permission prompts so the write flow reaches the client path.
-	sess.workspace.Permissions.SetSkipRequests(true)
+	sess.workspace.Permissions.SetPermissionMode(permission.PermissionModeYolo)
 	fc := &fileClient{a: a}
 	tool := tools.NewWriteTool(nil, sess.workspace.Permissions, sess.workspace.App.History, sess.workspace.App.FileTracker, cwd, fc)
 

@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"charm.land/catwalk/pkg/catwalk"
+	"charm.land/catwalk/v3/pkg/catwalk"
 	hyperp "github.com/charmbracelet/crush/internal/agent/hyper"
 	"github.com/charmbracelet/crush/internal/env"
 	"github.com/charmbracelet/crush/internal/lock"
@@ -22,6 +22,7 @@ import (
 	"github.com/charmbracelet/crush/internal/oauth/grok"
 	"github.com/charmbracelet/crush/internal/oauth/hyper"
 	"github.com/charmbracelet/crush/internal/oauth/openai"
+	"github.com/charmbracelet/crush/internal/permission"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 	"golang.org/x/sync/singleflight"
@@ -90,6 +91,9 @@ type RuntimeOverrides struct {
 	// TerminalRunner routes terminal commands to a client terminal when
 	// set (see TerminalRunner); nil means local shell only.
 	TerminalRunner TerminalRunner
+	// PermissionMode is the mode the server enforces for this session
+	// (normal, yolo or sysadmin); the zero value means "use the config".
+	PermissionMode permission.PermissionMode
 	// EnabledChannels lists the MCP servers opted in as channels for this
 	// session (via the --channels flag). A server present in MCP config only
 	// pushes channel events when it also appears here. Entries may be written
@@ -1505,6 +1509,7 @@ func (s *ConfigStore) reloadFromDiskLocked(ctx context.Context) error {
 		if !json.Valid(wsData) {
 			return fmt.Errorf("invalid JSON in config file %s", workspacePath)
 		}
+		wsData = migrateCatwalkV2File(workspacePath, wsData)
 		merged, mergeErr := loadFromBytes(append([][]byte{mustMarshalConfig(cfg)}, wsData))
 		if mergeErr == nil {
 			dataDir := cfg.Options.DataDirectory

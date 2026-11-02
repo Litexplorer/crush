@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/crush/internal/agent"
 	"github.com/charmbracelet/crush/internal/app"
 	"github.com/charmbracelet/crush/internal/message"
+	"github.com/charmbracelet/crush/internal/proto"
 	acpsdk "github.com/coder/acp-go-sdk"
 	"github.com/stretchr/testify/require"
 )
@@ -34,9 +35,14 @@ func (c *streamScriptCoordinator) RunAccepted(ctx context.Context, _ *agent.Acce
 	return c.Run(ctx, sessionID, prompt, attachments...)
 }
 
-func (c *streamScriptCoordinator) BeginAccepted(string) *agent.AcceptedRun       { return nil }
-func (c *streamScriptCoordinator) Cancel(string)                                 {}
-func (c *streamScriptCoordinator) CancelAll()                                    {}
+func (c *streamScriptCoordinator) BeginAccepted(string) *agent.AcceptedRun { return nil }
+func (c *streamScriptCoordinator) Cancel(string)                           {}
+func (c *streamScriptCoordinator) CancelAll()                              {}
+func (c *streamScriptCoordinator) AddNote(string, string)                  {}
+func (c *streamScriptCoordinator) SetHostContext(proto.HostContext)        {}
+func (c *streamScriptCoordinator) HostContext() proto.HostContext {
+	return proto.HostContext{}
+}
 func (c *streamScriptCoordinator) IsSessionBusy(string) bool                     { return false }
 func (c *streamScriptCoordinator) IsBusy() bool                                  { return false }
 func (c *streamScriptCoordinator) QueuedPrompts(string) int                      { return 0 }
