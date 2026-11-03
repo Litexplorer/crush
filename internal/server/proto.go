@@ -849,6 +849,39 @@ func (c *controllerV1) handlePostWorkspaceQuestionsCancel(w http.ResponseWriter,
 	jsonEncode(w, proto.QuestionAnswerResponse{Resolved: cancelled})
 }
 
+// handleGetWorkspacePermissionsSkip reports the legacy skip toggle by reading
+// the permission mode the workspace enforces.
+func (c *controllerV1) handleGetWorkspacePermissionsSkip(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	mode, err := c.backend.PermissionMode(id)
+	if err != nil {
+		c.handleError(w, r, err)
+		return
+	}
+	jsonEncode(w, proto.PermissionSkipRequest{Skip: mode.SkipsPrompts()})
+}
+
+// handlePostWorkspacePermissionsSkip sets the legacy skip toggle, which is the
+// permission mode: on selects yolo (a workspace in sysadmin stays there), off
+// returns to normal.
+func (c *controllerV1) handlePostWorkspacePermissionsSkip(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	var req proto.PermissionSkipRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		c.server.logError(r, "Failed to decode request", "error", err)
+		jsonError(w, http.StatusBadRequest, "failed to decode request")
+		return
+	}
+
+	if err := c.backend.SetSkipPermissions(id, req.Skip); err != nil {
+		c.handleError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
 // handlePostWorkspacePermissionsMode sets the permission mode for a workspace.
 func (c *controllerV1) handlePostWorkspacePermissionsMode(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")

@@ -32,6 +32,16 @@ func ProtoModeToPermission(mode WorkspacePermissionMode) permission.PermissionMo
 	}
 }
 
+// PermissionSkipRequest is the legacy "skip permission prompts" toggle that
+// clients written before permission modes still send and read. skip=true
+// means the workspace answers prompts by itself, which today's modes express
+// as yolo; a workspace already in sysadmin stays there because yolo is the
+// weaker of the two. GET and POST share the shape so a client can round-trip
+// it unchanged.
+type PermissionSkipRequest struct {
+	Skip bool `json:"skip"`
+}
+
 // CreatePermissionRequest represents a request to create a permission.
 type CreatePermissionRequest struct {
 	SessionID   string `json:"session_id"`

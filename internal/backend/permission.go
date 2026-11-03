@@ -39,6 +39,36 @@ func (b *Backend) GrantPermission(workspaceID string, req proto.PermissionGrant)
 	}
 }
 
+// PermissionMode reports the permission mode a workspace currently enforces.
+func (b *Backend) PermissionMode(workspaceID string) (permission.PermissionMode, error) {
+	ws, err := b.GetWorkspace(workspaceID)
+	if err != nil {
+		return permission.PermissionModeNormal, err
+	}
+	return ws.Permissions.PermissionMode(), nil
+}
+
+// SetSkipPermissions maps the legacy "skip permission prompts" toggle onto
+// the permission modes that replaced it: on selects yolo, off returns to
+// normal. A workspace already in sysadmin keeps sysadmin when the toggle is
+// turned on: sysadmin is the stronger mode, and demoting it to yolo would
+// re-arm the exec-time block list the caller never asked to get back.
+func (b *Backend) SetSkipPermissions(workspaceID string, skip bool) error {
+	ws, err := b.GetWorkspace(workspaceID)
+	if err != nil {
+		return err
+	}
+
+	if skip {
+		if ws.Permissions.PermissionMode() != permission.PermissionModeSysadmin {
+			ws.Permissions.SetPermissionMode(permission.PermissionModeYolo)
+		}
+		return nil
+	}
+	ws.Permissions.SetPermissionMode(permission.PermissionModeNormal)
+	return nil
+}
+
 // SetPermissionMode sets the permission mode for a workspace.
 //
 // Only the permission service is updated; the config override is left

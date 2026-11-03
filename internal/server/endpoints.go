@@ -364,6 +364,29 @@ func (c *controllerV1) endpoints() []apigen.Endpoint {
 			Fails(400, 404, 500).
 			Handle(c.handlePostWorkspacePermissionsMode),
 
+		// 兼容旧客户端的「跳过权限确认」开关：读写都映射到 permission mode。
+		apigen.Get("/v1/workspaces/{id}/permissions/skip").
+			Summary("Get skip permissions status").
+			Description("Legacy view of the permission mode: skip is true when the "+
+				"workspace answers permission prompts itself (yolo or sysadmin). "+
+				"New clients should read the mode instead.").
+			Tags("permissions").
+			PathParam("id", "Workspace ID").
+			Responds(proto.PermissionSkipRequest{}).
+			Fails(404, 500).
+			Handle(c.handleGetWorkspacePermissionsSkip),
+
+		apigen.Post("/v1/workspaces/{id}/permissions/skip").
+			Summary("Set skip permissions").
+			Description("Legacy toggle mapped onto the permission mode: true selects "+
+				"yolo (or keeps sysadmin), false returns to normal. New clients "+
+				"should set the mode instead.").
+			Tags("permissions").
+			PathParam("id", "Workspace ID").
+			Accepts(proto.PermissionSkipRequest{}).
+			Fails(400, 404, 500).
+			Handle(c.handlePostWorkspacePermissionsSkip),
+
 		apigen.Post("/v1/workspaces/{id}/permissions/grant").
 			Summary("Grant permission").
 			Tags("permissions").
