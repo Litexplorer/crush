@@ -1885,3 +1885,85 @@ func TestShutdownWorkspaces_GivesUpAtDeadline(t *testing.T) {
 	require.ErrorIs(t, b.ShutdownWorkspaces(ctx), context.DeadlineExceeded)
 	require.Zero(t, b.workspaces.Len())
 }
+
+// -- Busy teardown deferral --
+//
+// A sub-agent can keep working for minutes after the user navigates away,
+// and the frontend closes its SSE stream on every session switch. Tearing
+// the workspace down on that detach cancelled the run the user had just
+// asked for, which surfaced as "tool bash failed: context canceled" inside
+// sub-agents. The workspace now waits for the work to finish.
+
+// TestTeardown_WaitsForInFlightWork is the core regression: with a run
+// still busy, the last client leaving must not release the workspace.
+func TestTeardown_WaitsForInFlightWork(t *testing.T) {
+	t.Parallel()
+
+	b, srvShutdowns := newTestBackend(t)
+	b.mu.Lock()
+	b.teardownRetry = time.Hour
+	b.mu.Unlock()
+
+	coord := newBlockingCoordinator()
+	coord.busy = true
+	ws := insertAgentWorkspace(t, b, coord)
+	var shutdowns atomic.Int32
+	ws.shutdownFn = func() { shutdowns.Add(1) }
+
+	b.teardown(ws)
+
+	require.Equal(t, int32(0), shutdowns.Load(),
+		"a workspace with work in flight must not be shut down")
+	_, err := b.GetWorkspace(ws.ID)
+	require.NoError(t, err, "the workspace must stay addressable while it works")
+	require.Equal(t, int32(0), srvShutdowns.Load())
+}
+
+// TestTeardown_ClientReturnCancelsPendingTeardown covers the reconnect
+// side: the deferred re-check must be dropped when a client comes back, so
+// the workspace keeps running its work.
+func TestTeardown_ClientReturnCancelsPendingTeardown(t *testing.T) {
+	t.Parallel()
+
+	b, _ := newTestBackend(t)
+	b.mu.Lock()
+	b.teardownRetry = time.Hour
+	b.mu.Unlock()
+
+	coord := newBlockingCoordinator()
+	coord.busy = true
+	ws := insertAgentWorkspace(t, b, coord)
+	var shutdowns atomic.Int32
+	ws.shutdownFn = func() { shutdowns.Add(1) }
+
+	b.teardown(ws)
+	b.mu.Lock()
+	armed := ws.teardownTimer != nil
+	b.mu.Unlock()
+	require.True(t, armed, "a busy teardown must arm a re-check")
+
+	b.registerClient(ws, newClientID(t))
+	b.mu.Lock()
+	armed = ws.teardownTimer != nil
+	b.mu.Unlock()
+	require.False(t, armed, "a returning client must cancel the re-check")
+	require.Equal(t, int32(0), shutdowns.Load())
+}
+
+// TestTeardown_IdleWorkspaceStillTearsDownImmediately is the control: the
+// deferral only applies to work in flight, not to an idle workspace.
+func TestTeardown_IdleWorkspaceStillTearsDownImmediately(t *testing.T) {
+	t.Parallel()
+
+	b, srvShutdowns := newTestBackend(t)
+	coord := newBlockingCoordinator()
+	ws := insertAgentWorkspace(t, b, coord)
+	var shutdowns atomic.Int32
+	ws.shutdownFn = func() { shutdowns.Add(1) }
+
+	b.teardown(ws)
+
+	require.Equal(t, int32(1), shutdowns.Load(),
+		"an idle workspace must be released on the spot")
+	require.Equal(t, int32(1), srvShutdowns.Load())
+}

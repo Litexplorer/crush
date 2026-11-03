@@ -76,6 +76,19 @@ var DefaultIdleShutdownDelay = 60 * time.Second
 // via CRUSH_SERVER_DETACH_GRACE (seconds; 0 restores immediate teardown).
 var DefaultDetachGrace = 10 * time.Second
 
+// DefaultTeardownRetry is how often a workspace whose last client left but
+// which still has work in flight is re-checked before it is torn down.
+//
+// Tearing such a workspace down cancels every run it hosts, and a run can
+// easily outlive the client's attention span: a sub-agent auditing a repo
+// for ten minutes while the user switches to another session is the normal
+// case, not the pathological one. Waiting until the workspace is idle keeps
+// the work the client asked for alive; the retry interval only bounds how
+// long the workspace lingers after that work finishes. Overridable via
+// CRUSH_SERVER_TEARDOWN_RETRY (seconds; 0 restores the old
+// cancel-everything-immediately behavior).
+var DefaultTeardownRetry = 5 * time.Second
+
 // ShutdownFunc is called when the backend needs to trigger a server
 // shutdown (e.g. when the last workspace is removed).
 type ShutdownFunc func()
@@ -135,12 +148,13 @@ type Backend struct {
 	retired map[string]struct{}
 	mu      sync.Mutex
 
-	cfg         *config.ConfigStore
-	ctx         context.Context
-	shutdownFn  ShutdownFunc
-	createGrace time.Duration
-	lingerDelay time.Duration
-	detachGrace time.Duration
+	cfg           *config.ConfigStore
+	ctx           context.Context
+	shutdownFn    ShutdownFunc
+	createGrace   time.Duration
+	lingerDelay   time.Duration
+	detachGrace   time.Duration
+	teardownRetry time.Duration
 }
 
 // clientState tracks one client's claim on a workspace.
@@ -242,6 +256,11 @@ type Workspace struct {
 	// embedded [app.App.Shutdown]; tests may override it to avoid
 	// driving a full [app.App] through shutdown.
 	shutdownFn func()
+
+	// teardownTimer, when non-nil, is an armed re-check for a workspace
+	// whose clients have all left while work was still in flight. Guarded
+	// by [Backend.mu]; registerClient stops it when a client comes back.
+	teardownTimer *time.Timer
 }
 
 // invokeShutdown calls the workspace shutdown hook if set, falling
@@ -295,15 +314,16 @@ func (w *Workspace) Shutdown() {
 // canceled); see [Backend.startChannelRouter].
 func New(ctx context.Context, cfg *config.ConfigStore, shutdownFn ShutdownFunc) *Backend {
 	b := &Backend{
-		workspaces:  csync.NewMap[string, *Workspace](),
-		pathIndex:   make(map[string]string),
-		retired:     make(map[string]struct{}),
-		cfg:         cfg,
-		ctx:         ctx,
-		shutdownFn:  shutdownFn,
-		createGrace: DefaultCreateGrace,
-		lingerDelay: idleShutdownDelayFromEnv(),
-		detachGrace: durationFromEnv("CRUSH_SERVER_DETACH_GRACE", DefaultDetachGrace),
+		workspaces:    csync.NewMap[string, *Workspace](),
+		pathIndex:     make(map[string]string),
+		retired:       make(map[string]struct{}),
+		cfg:           cfg,
+		ctx:           ctx,
+		shutdownFn:    shutdownFn,
+		createGrace:   DefaultCreateGrace,
+		lingerDelay:   idleShutdownDelayFromEnv(),
+		detachGrace:   durationFromEnv("CRUSH_SERVER_DETACH_GRACE", DefaultDetachGrace),
+		teardownRetry: durationFromEnv("CRUSH_SERVER_TEARDOWN_RETRY", DefaultTeardownRetry),
 	}
 	b.startChannelRouter()
 	return b
@@ -734,6 +754,9 @@ func (b *Backend) releaseHold(workspaceID, clientID string) error {
 // old timer, so an already-fired timer racing this call fails expireHold's
 // identity check instead of killing the new claim.
 func (b *Backend) registerClient(ws *Workspace, clientID string) {
+	// A client coming back cancels a pending busy-teardown re-check: the
+	// workspace is in use again. Callers hold b.mu, which guards the timer.
+	b.stopTeardownTimerLocked(ws)
 	ws.clientsMu.Lock()
 	defer ws.clientsMu.Unlock()
 	if old, ok := ws.clients[clientID]; ok {
@@ -906,6 +929,15 @@ func (b *Backend) teardown(ws *Workspace) {
 		return
 	}
 	ws.clientsMu.Unlock()
+	// A workspace with work in flight is not finished: tearing it down now
+	// cancels the very run its client asked for, and a sub-agent can work
+	// for minutes after the user has navigated away. Keep it alive and look
+	// again once the retry window elapses; a returning client cancels the
+	// pending teardown through registerClient.
+	if b.deferTeardownWhileBusyLocked(ws) {
+		b.mu.Unlock()
+		return
+	}
 	if !b.unregisterLocked(ws) {
 		b.mu.Unlock()
 		return
@@ -923,6 +955,46 @@ func (b *Backend) teardown(ws *Workspace) {
 	if shutdownNow {
 		slog.Info("Last workspace removed, shutting down server...")
 		b.shutdownFn()
+	}
+}
+
+// deferTeardownWhileBusyLocked reports whether teardown has to wait for the
+// workspace to go idle, arming the re-check that will try again.
+//
+// It returns false while the backend is shutting down: an external stop must
+// not be delayed by work that stop is about to cancel anyway. It also returns
+// false when the retry interval is zero, which restores the old "tear down
+// immediately and cancel everything" behavior.
+//
+// It must be called with b.mu held and with ws already known to have no
+// clients left.
+func (b *Backend) deferTeardownWhileBusyLocked(ws *Workspace) bool {
+	// A workspace built without an app (tests, and the never-initialized
+	// path) has no coordinator to ask, so it has no work to wait for.
+	if b.closing || b.teardownRetry <= 0 || ws.App == nil || ws.AgentCoordinator == nil || !ws.AgentCoordinator.IsBusy() {
+		b.stopTeardownTimerLocked(ws)
+		return false
+	}
+	if ws.teardownTimer != nil {
+		// Already waiting; a second teardown call for the same workspace
+		// must not arm a second timer.
+		return true
+	}
+	ws.teardownTimer = time.AfterFunc(b.teardownRetry, func() {
+		b.mu.Lock()
+		ws.teardownTimer = nil
+		b.mu.Unlock()
+		b.teardown(ws)
+	})
+	return true
+}
+
+// stopTeardownTimerLocked cancels a pending busy-teardown re-check, if any.
+// Must be called with b.mu held.
+func (b *Backend) stopTeardownTimerLocked(ws *Workspace) {
+	if ws.teardownTimer != nil {
+		ws.teardownTimer.Stop()
+		ws.teardownTimer = nil
 	}
 }
 
