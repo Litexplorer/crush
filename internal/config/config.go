@@ -1182,8 +1182,14 @@ func (c *Config) SetupAgents() {
 			Model:        SelectedModelTypeLarge,
 			ContextPaths: c.Options.ContextPaths,
 			AllowedTools: resolveTaskTools(allowedTools),
-			// NO MCPs or LSPs by default
-			AllowedMCP: map[string][]string{},
+			// nil hands the subagent every MCP tool the workspace has, so
+			// delegated work can reach the same servers the caller can.
+			// The cost is one copy of each MCP schema per parallel
+			// subagent, and MCP tools are not part of the read-only
+			// promise: a "read" subagent can call a write-capable MCP tool
+			// (e.g. a database tool). Narrow this to a per-server map when
+			// that matters, e.g. map[string][]string{"db-mcp": {"query"}}.
+			AllowedMCP: nil,
 		},
 
 		AgentPlan: {
