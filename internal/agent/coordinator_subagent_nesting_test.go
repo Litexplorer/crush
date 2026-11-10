@@ -51,15 +51,19 @@ func TestSubAgentToolListExcludesAgentTool(t *testing.T) {
 		filetracker: *env.filetracker,
 	}
 
-	taskCfg := cfg.Config().Agents[config.AgentTask]
-	require.Contains(t, taskCfg.AllowedTools, AgentToolName,
-		"precondition: the task allowlist carries the agent tool, which is what made the build recurse")
+	// 前置条件：主 agent 的 allowlist 里确实带着委托类工具，否则这条断言无从谈起。
+	coderCfg := cfg.Config().Agents[config.AgentCoder]
+	require.Contains(t, coderCfg.AllowedTools, AgentToolName,
+		"precondition: the coder allowlist carries the agent tool")
 
-	list, err := coord.buildTools(context.Background(), taskCfg, true)
+	// 拿主 agent 的配置按「子 agent」构建：委托类工具必须被剥掉，
+	// 否则子 agent 会无限套娃。
+	list, err := coord.buildTools(context.Background(), coderCfg, true, nil)
 	require.NoError(t, err)
 
+	delegation := []string{AgentToolName, AgentDispatchToolName, AgentSendToolName, AgentStatusToolName, AgentStopToolName}
 	for _, tool := range list {
-		require.NotEqual(t, AgentToolName, tool.Info().Name,
-			"a sub-agent must not be offered the agent tool: it would spawn sub-agents without bound")
+		require.NotContains(t, delegation, tool.Info().Name,
+			"a sub-agent must not be offered a delegation tool: it would spawn sub-agents without bound")
 	}
 }

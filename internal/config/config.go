@@ -1000,6 +1000,30 @@ func (c *Config) IsModelAvailable(provider, model string) bool {
 	return false
 }
 
+// UsableModels returns the models the current credential can serve: a
+// ChatGPT or Grok login only reaches its subscription's models.
+func (p ProviderConfig) UsableModels() []catwalk.Model {
+	if models, ok := p.SubscriptionModels(); ok {
+		return models
+	}
+	return p.Models
+}
+
+// SubscriptionModels returns the models a ChatGPT or Grok login grants, and
+// whether the provider is signed in with one at all.
+func (p ProviderConfig) SubscriptionModels() ([]catwalk.Model, bool) {
+	if p.OAuthToken == nil {
+		return nil, false
+	}
+	switch catwalk.InferenceProvider(p.ID) {
+	case catwalk.InferenceProviderOpenAI:
+		return p.ChatGPTModels, true
+	case catwalk.InferenceProviderXAI:
+		return p.GrokModels, true
+	}
+	return nil, false
+}
+
 func (c *Config) GetProviderForModel(modelType SelectedModelType) *ProviderConfig {
 	model, ok := c.Models[modelType]
 	if !ok {
@@ -1040,6 +1064,10 @@ const maxRecentModelsPerType = 10
 func allToolNames() []string {
 	return []string{
 		"agent",
+		"agent_dispatch",
+		"agent_send",
+		"agent_status",
+		"agent_stop",
 		"bash",
 		"crush_info",
 		"crush_logs",
@@ -1085,9 +1113,15 @@ func resolveAllowedTools(allTools []string, disabledTools []string) []string {
 
 func resolvePlanTools(tools []string) []string {
 	// The read-only LSP lookups mirror the task agent's tool set: planning
-	// needs symbol navigation just as much as research does.
+	// needs symbol navigation just as much as research does. Both
+	// delegation styles are listed; the coordinator keeps whichever one
+	// suits the run mode.
 	planTools := []string{
 		"agent",
+		"agent_dispatch",
+		"agent_send",
+		"agent_status",
+		"agent_stop",
 		"glob",
 		"grep",
 		"ls",
@@ -1099,6 +1133,21 @@ func resolvePlanTools(tools []string) []string {
 		"view",
 	}
 	return filterSlice(tools, planTools, true)
+}
+
+// resolveReadOnlyTools returns the tools a subagent may use to inspect the
+// codebase: reading, searching, and symbol navigation, with no way to change
+// anything.
+func resolveReadOnlyTools(tools []string) []string {
+	readOnlyTools := []string{"glob", "grep", "ls", "lsp_call_hierarchy", "lsp_definition", "lsp_symbols", "sourcegraph", "view"}
+	return filterSlice(tools, readOnlyTools, true)
+}
+
+// resolveTaskTools returns the tools available to the task subagent: the
+// read-only set plus bash, so it can run git diff, tests, and rg while
+// reviewing. It still cannot edit or write files.
+func resolveTaskTools(tools []string) []string {
+	return filterSlice(tools, append(resolveReadOnlyTools(tools), "bash"), true)
 }
 
 func filterSlice(data []string, mask []string, include bool) []string {
@@ -1132,12 +1181,9 @@ func (c *Config) SetupAgents() {
 			Description:  "An agent that helps with searching for context and finding implementation details.",
 			Model:        SelectedModelTypeLarge,
 			ContextPaths: c.Options.ContextPaths,
-			// The task agent runs with the full tool set, same as the
-			// coder agent, so delegated work can read, edit, and run
-			// commands without a restricted tool surface.
-			AllowedTools: allowedTools,
-			// Nil means every MCP tool is available to this agent.
-			AllowedMCP: nil,
+			AllowedTools: resolveTaskTools(allowedTools),
+			// NO MCPs or LSPs by default
+			AllowedMCP: map[string][]string{},
 		},
 
 		AgentPlan: {

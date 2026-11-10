@@ -192,6 +192,17 @@ type ShellCommand struct {
 
 func (ShellCommand) isPart() {}
 
+// SubAgentReport stores the result a detached subagent reported back.
+type SubAgentReport struct {
+	Label  string `json:"label"`
+	Output string `json:"output"`
+	Failed bool   `json:"failed,omitempty"`
+	// Model is provider/model, for display.
+	Model string `json:"model,omitempty"`
+}
+
+func (SubAgentReport) isPart() {}
+
 // MarshalJSON implements the [json.Marshaler] interface.
 func (m Message) MarshalJSON() ([]byte, error) {
 	parts, err := MarshalParts(m.Parts)
@@ -497,14 +508,15 @@ func (m *Message) AddBinary(mimeType string, data []byte) {
 type partType string
 
 const (
-	reasoningType    partType = "reasoning"
-	textType         partType = "text"
-	imageURLType     partType = "image_url"
-	binaryType       partType = "binary"
-	toolCallType     partType = "tool_call"
-	toolResultType   partType = "tool_result"
-	finishType       partType = "finish"
-	shellCommandType partType = "shell_command"
+	reasoningType      partType = "reasoning"
+	textType           partType = "text"
+	imageURLType       partType = "image_url"
+	binaryType         partType = "binary"
+	toolCallType       partType = "tool_call"
+	toolResultType     partType = "tool_result"
+	finishType         partType = "finish"
+	shellCommandType   partType = "shell_command"
+	subAgentReportType partType = "sub_agent_report"
 )
 
 type partWrapper struct {
@@ -536,6 +548,8 @@ func MarshalParts(parts []ContentPart) ([]byte, error) {
 			typ = finishType
 		case ShellCommand:
 			typ = shellCommandType
+		case SubAgentReport:
+			typ = subAgentReportType
 		default:
 			return nil, fmt.Errorf("unknown part type: %T", part)
 		}
@@ -613,6 +627,12 @@ func UnmarshalParts(data []byte) ([]ContentPart, error) {
 			parts = append(parts, part)
 		case shellCommandType:
 			part := ShellCommand{}
+			if err := json.Unmarshal(wrapper.Data, &part); err != nil {
+				return nil, err
+			}
+			parts = append(parts, part)
+		case subAgentReportType:
+			part := SubAgentReport{}
 			if err := json.Unmarshal(wrapper.Data, &part); err != nil {
 				return nil, err
 			}
