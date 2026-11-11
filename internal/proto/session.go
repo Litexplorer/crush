@@ -13,6 +13,10 @@ package proto
 // currentSessionID equals this session's ID and which have at least one
 // live SSE stream. Hold-only clients (streams == 0) do not contribute.
 // Like IsBusy, it is computed on read by REST handlers.
+//
+// Subtitle is the opening line of the session's first user message, shown
+// under the title in session lists so a row is recognisable before opening it.
+// REST handlers populate it and omit it when the session has no prompt.
 type Session struct {
 	ID               string  `json:"id"`
 	ParentSessionID  string  `json:"parent_session_id"`
@@ -22,6 +26,7 @@ type Session struct {
 	CompletionTokens int64   `json:"completion_tokens"`
 	TotalTokens      int64   `json:"total_tokens"`
 	SummaryMessageID string  `json:"summary_message_id"`
+	Subtitle         string  `json:"subtitle,omitempty"`
 	Cost             float64 `json:"cost"`
 	Todos            []Todo  `json:"todos,omitempty"`
 	Channel          string  `json:"channel,omitempty"`

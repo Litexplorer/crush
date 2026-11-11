@@ -62,6 +62,9 @@ type Service interface {
 	ListFromSummary(ctx context.Context, sessionID, summaryMessageID string) ([]Message, error)
 	ListUserMessages(ctx context.Context, sessionID string) ([]Message, error)
 	ListAllUserMessages(ctx context.Context) ([]Message, error)
+	// FirstUserTexts returns the first user text of every session, one entry
+	// per session keyed by session ID. It backs the session-list subtitle.
+	FirstUserTexts(ctx context.Context) (map[string]string, error)
 	SearchMessages(ctx context.Context, query string, limit int) ([]SearchResult, error)
 	GetLastAssistantMessage(ctx context.Context, sessionID string) (Message, error)
 	Delete(ctx context.Context, id string) error
@@ -640,6 +643,60 @@ func (s *service) ListAllUserMessages(ctx context.Context) ([]Message, error) {
 		}
 	}
 	return messages, nil
+}
+
+// subtitleMaxRunes caps how much of a session's first prompt the list shows.
+const subtitleMaxRunes = 120
+
+// firstTextLine returns the first non-empty line of the first visible text
+// part, trimmed and truncated; hidden continuation text is skipped because it
+// was never typed by the user.
+func firstTextLine(parts []ContentPart) string {
+	for _, part := range parts {
+		text, ok := part.(TextContent)
+		if !ok || text.Hidden {
+			continue
+		}
+		for _, line := range strings.Split(text.Text, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			if runes := []rune(line); len(runes) > subtitleMaxRunes {
+				return strings.TrimSpace(string(runes[:subtitleMaxRunes])) + "…"
+			}
+			return line
+		}
+	}
+	return ""
+}
+
+// FirstUserTexts returns the first user message text of every session. Ties
+// inside the same second resolve to the lowest message ID so the subtitle does
+// not flip between refreshes, and sessions without text are omitted.
+func (s *service) FirstUserTexts(ctx context.Context) (map[string]string, error) {
+	rows, err := s.q.ListFirstUserMessagesBySession(ctx)
+	if err != nil {
+		return nil, err
+	}
+	texts := make(map[string]string, len(rows))
+	kept := make(map[string]string, len(rows))
+	for _, row := range rows {
+		if id, ok := kept[row.SessionID]; ok && id < row.ID {
+			continue
+		}
+		kept[row.SessionID] = row.ID
+		parts, err := unmarshalParts([]byte(row.Parts))
+		if err != nil {
+			continue
+		}
+		if text := firstTextLine(parts); text != "" {
+			texts[row.SessionID] = text
+		} else {
+			delete(texts, row.SessionID)
+		}
+	}
+	return texts, nil
 }
 
 func (s *service) SearchMessages(ctx context.Context, query string, limit int) ([]SearchResult, error) {

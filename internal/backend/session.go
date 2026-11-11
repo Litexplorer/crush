@@ -40,6 +40,23 @@ func (b *Backend) ListSessions(ctx context.Context, workspaceID string) ([]sessi
 	return ws.Sessions.List(ctx)
 }
 
+// SessionSubtitles returns the first user message text of every session in
+// the workspace, keyed by session ID. Session lists show it as a subtitle so a
+// row is recognisable before opening it.
+func (b *Backend) SessionSubtitles(ctx context.Context, workspaceID string) (map[string]string, error) {
+	ws, err := b.GetWorkspace(workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	// Test workspaces are registered without an App; subtitles are cosmetic so
+	// a missing message service means "no subtitles" rather than an error.
+	if ws.App == nil || ws.Messages == nil {
+		return nil, nil
+	}
+
+	return ws.Messages.FirstUserTexts(ctx)
+}
+
 // GetAgentSession returns session metadata with the agent's busy
 // status.
 func (b *Backend) GetAgentSession(ctx context.Context, workspaceID, sessionID string) (proto.AgentSession, error) {

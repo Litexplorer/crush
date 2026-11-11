@@ -197,6 +197,50 @@ func (q *Queries) ListAllUserMessages(ctx context.Context) ([]Message, error) {
 	return items, nil
 }
 
+const listFirstUserMessagesBySession = `-- name: ListFirstUserMessagesBySession :many
+SELECT m.session_id, m.id, m.parts
+FROM messages m
+JOIN (
+    SELECT session_id, MIN(created_at) AS first_at
+    FROM messages
+    WHERE role = 'user'
+    GROUP BY session_id
+) earliest ON earliest.session_id = m.session_id AND earliest.first_at = m.created_at
+WHERE m.role = 'user'
+`
+
+type ListFirstUserMessagesBySessionRow struct {
+	SessionID string `json:"session_id"`
+	ID        string `json:"id"`
+	Parts     string `json:"parts"`
+}
+
+// First user message of every session, backing the session-list subtitle.
+// created_at has one-second resolution, so a session can match several rows
+// within the same second; callers dedupe per session and keep the lowest id.
+func (q *Queries) ListFirstUserMessagesBySession(ctx context.Context) ([]ListFirstUserMessagesBySessionRow, error) {
+	rows, err := q.query(ctx, q.listFirstUserMessagesBySessionStmt, listFirstUserMessagesBySession)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListFirstUserMessagesBySessionRow{}
+	for rows.Next() {
+		var i ListFirstUserMessagesBySessionRow
+		if err := rows.Scan(&i.SessionID, &i.ID, &i.Parts); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listMessagesBySession = `-- name: ListMessagesBySession :many
 SELECT id, session_id, role, parts, model, created_at, updated_at, finished_at, provider, is_summary_message, prism_model_id, prism_model_name, prism_hypercredit_savings, prism_dollar_savings
 FROM messages

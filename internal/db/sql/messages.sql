@@ -64,6 +64,20 @@ WHERE session_id = ? AND role = 'user'
 ORDER BY created_at DESC
 LIMIT 200;
 
+-- name: ListFirstUserMessagesBySession :many
+-- First user message of every session, backing the session-list subtitle.
+-- created_at has one-second resolution, so a session can match several rows
+-- within the same second; callers dedupe per session and keep the lowest id.
+SELECT m.session_id, m.id, m.parts
+FROM messages m
+JOIN (
+    SELECT session_id, MIN(created_at) AS first_at
+    FROM messages
+    WHERE role = 'user'
+    GROUP BY session_id
+) earliest ON earliest.session_id = m.session_id AND earliest.first_at = m.created_at
+WHERE m.role = 'user';
+
 -- name: ListAllUserMessages :many
 -- Backs prompt history when no session is open. Needs
 -- idx_messages_role_created_at to seek rather than scan the table.

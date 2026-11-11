@@ -363,11 +363,14 @@ func (c *controllerV1) handleGetWorkspaceSessions(w http.ResponseWriter, r *http
 		return
 	}
 	ws, _ := c.backend.GetWorkspace(id)
+	// Subtitles are cosmetic: a failed lookup leaves the list intact.
+	subtitles, _ := c.backend.SessionSubtitles(r.Context(), id)
 	result := make([]proto.Session, len(sessions))
 	for i, s := range sessions {
 		result[i] = sessionToProto(s)
 		result[i].IsBusy = isSessionBusy(ws, s.ID)
 		result[i].AttachedClients = attachedClients(ws, s.ID)
+		result[i].Subtitle = subtitles[s.ID]
 	}
 	jsonEncode(w, result)
 }
