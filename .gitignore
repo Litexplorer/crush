@@ -67,3 +67,6 @@ completions/crush.*sh
 /internal/ui/model/frame_dump.go
 /internal/ui/model/zz_replay_test.go
 /tmp_x11probe/
+
+# Upstream docs site
+/docs-site

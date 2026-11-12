@@ -14,6 +14,14 @@ type AcpSession struct {
 	UpdatedAt int64  `json:"updated_at"`
 }
 
+type DisabledSkill struct {
+	Name string `json:"name"`
+}
+
+type EnabledSkill struct {
+	Name string `json:"name"`
+}
+
 type File struct {
 	ID        string `json:"id"`
 	SessionID string `json:"session_id"`
@@ -47,6 +55,7 @@ type Message struct {
 	PrismModelName          sql.NullString  `json:"prism_model_name"`
 	PrismHypercreditSavings sql.NullFloat64 `json:"prism_hypercredit_savings"`
 	PrismDollarSavings      sql.NullFloat64 `json:"prism_dollar_savings"`
+	ModelName               sql.NullString  `json:"model_name"`
 }
 
 type MessagesFt struct {

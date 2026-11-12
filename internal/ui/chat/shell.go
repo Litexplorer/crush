@@ -189,7 +189,7 @@ func (s *ShellItem) HandleKeyEvent(key tea.KeyMsg) (bool, tea.Cmd) {
 			return true, nil
 		}
 	case "shift+right", "L":
-		s.xOffset = min(s.xOffset+shellHScrollStep, max(s.maxLineWidth, s.xOffset))
+		s.xOffset = min(s.xOffset+shellHScrollStep, s.maxLineWidth)
 		s.Bump()
 		return true, nil
 	}
@@ -198,10 +198,7 @@ func (s *ShellItem) HandleKeyEvent(key tea.KeyMsg) (bool, tea.Cmd) {
 
 // ScrollHorizontal adjusts the horizontal scroll offset by delta columns.
 func (s *ShellItem) ScrollHorizontal(delta int) {
-	s.xOffset = max(0, s.xOffset+delta)
-	if s.maxLineWidth > 0 {
-		s.xOffset = min(s.xOffset, s.maxLineWidth)
-	}
+	s.xOffset = min(max(0, s.xOffset+delta), s.maxLineWidth)
 	s.Bump()
 }
 
@@ -275,6 +272,9 @@ func (s *ShellItem) RawRender(width int) string {
 		}
 	}
 
+	// Normalize CRLF before stripping cursor controls so a bare CR still
+	// resets its line when followed by an erase sequence.
+	raw = strings.ReplaceAll(raw, "\r\n", "\n")
 	raw = common.StripCursorControl(raw)
 	output := common.RemapANSI16(raw, s.sty.ANSI)
 	lines := strings.Split(output, "\n")
@@ -288,6 +288,9 @@ func (s *ShellItem) RawRender(width int) string {
 		}
 	}
 	s.maxLineWidth = max(0, maxW-cappedWidth)
+	// A wider item or collapsed output can leave the offset past the
+	// widest line, which would scroll every line out of view.
+	s.xOffset = min(s.xOffset, s.maxLineWidth)
 
 	var body strings.Builder
 
@@ -340,7 +343,8 @@ func firstLines(s string, count int) string {
 		}
 		end += next
 		if i == count-1 {
-			return s[:end]
+			// Remove both bytes if the delimiter is CRLF.
+			return strings.TrimSuffix(s[:end], "\r")
 		}
 		end++
 	}

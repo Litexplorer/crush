@@ -257,14 +257,19 @@ func (m *Chat) Draw(scr uv.Screen, area uv.Rectangle) {
 	}
 
 	rendered := m.list.Render()
-	// If we're in follow mode but the render revealed we're no longer at
-	// the bottom (e.g. streaming content grew an item), re-anchor and
-	// re-render so the view stays pinned to the end. Manual scroll mode
-	// suppresses this re-anchoring: the view only moves when the user
-	// scrolls manually.
-	if m.follow && !m.manualScroll && !m.list.AtBottom() {
+	// In follow mode the view stays pinned to the end. Re-anchor whenever
+	// the render moved the end: content growing past it (streaming), or
+	// shrinking away from it (an item removed, such as the prompt echo
+	// giving way to the stored prompt), which would otherwise leave the
+	// transcript lifted off the bottom until something else scrolls.
+	// Manual scroll mode suppresses this re-anchoring: the view only moves
+	// when the user scrolls manually.
+	if m.follow && !m.manualScroll {
+		idx, line := m.list.ScrollPosition()
 		m.list.ScrollToBottom()
-		rendered = m.list.Render()
+		if newIdx, newLine := m.list.ScrollPosition(); newIdx != idx || newLine != line {
+			rendered = m.list.Render()
+		}
 	}
 	method, ok := scr.WidthMethod().(ansi.Method)
 	if !ok {
@@ -554,21 +559,6 @@ func (m *Chat) UpdateNestedToolIDs(containerID string) {
 // of how many items are animating. gen is the clock generation the tick
 // was armed for.
 type animTickMsg struct{ gen uint64 }
-
-// HasLiveSpinner reports whether any item, on screen or not, is spinning
-// with the animation clock allowed. A frozen spinner is a ghost left by a
-// killed run, not progress.
-func (m *Chat) HasLiveSpinner() bool {
-	if !m.animAllowed {
-		return false
-	}
-	for idx := m.list.Len() - 1; idx >= 0; idx-- {
-		if animatable, ok := m.list.ItemAt(idx).(chat.Animatable); ok && animatable.Spinning() {
-			return true
-		}
-	}
-	return false
-}
 
 // hasVisibleAnimation reports whether any item in the viewport is spinning.
 func (m *Chat) hasVisibleAnimation() bool {
