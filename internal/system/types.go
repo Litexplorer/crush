@@ -50,4 +50,11 @@ type counters struct {
 	memory memoryCounters
 	disks  []diskCounters
 	net    map[string]netCounters
+
+	// 容器限额（cgroup v1/v2）：memoryLimit 为 0 表示没有限额，按宿主机口径展示；
+	// cpuQuotaCores 为 0 表示 CPU 未设配额
+	memoryLimit    uint64
+	memoryUsage    uint64
+	memoryInactive uint64
+	cpuQuotaCores  float64
 }

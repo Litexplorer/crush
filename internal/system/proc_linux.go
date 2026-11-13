@@ -42,6 +42,15 @@ func readCounters() (counters, bool) {
 	result.memory = readMemory()
 	result.disks = readDisks()
 	result.net = readNetDev()
+
+	// 容器限额：/proc/meminfo 是宿主口径，有 cgroup 限额时以限额为准
+	limits := readCgroupLimits()
+	if limits.memoryFound {
+		result.memoryLimit = limits.memoryLimit
+		result.memoryUsage = limits.memoryUsage
+		result.memoryInactive = limits.memoryInactive
+	}
+	result.cpuQuotaCores = limits.cpuQuotaCores
 	return result, true
 }
 

@@ -32,6 +32,9 @@ type SystemCPU struct {
 	Load1   float64   `json:"load1"`
 	Load5   float64   `json:"load5"`
 	Load15  float64   `json:"load15"`
+	// QuotaCores is the CPU quota expressed in cores (cgroup cpu.max /
+	// cpu.cfs_quota_us). Zero means the container has no CPU limit.
+	QuotaCores float64 `json:"quota_cores"`
 }
 
 // SystemMemory reports physical memory and swap in bytes.
@@ -42,6 +45,11 @@ type SystemMemory struct {
 	Percent        float64 `json:"percent"`
 	SwapTotalBytes uint64  `json:"swap_total_bytes"`
 	SwapUsedBytes  uint64  `json:"swap_used_bytes"`
+	// LimitSource is "cgroup" when the figures come from the container's
+	// cgroup limit, or "host" when /proc/meminfo is reported as is. Container
+	// limits are far smaller than the host's total on shared machines, so a
+	// client should show which number it is looking at.
+	LimitSource string `json:"limit_source"`
 }
 
 // SystemDisk is the space usage of one mounted filesystem.

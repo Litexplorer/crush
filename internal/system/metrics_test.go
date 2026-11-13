@@ -66,3 +66,31 @@ func TestBusyPercent(t *testing.T) {
 	// 计数回绕（/proc 被重置）时不应出现超过 100 的值
 	require.Equal(t, 0.0, busyPercent(10, 20))
 }
+
+// TestMemorySnapshotPrefersCgroupLimit 校验容器口径：有 cgroup 限额时总量取限额，
+// 已用扣掉不可回收的文件页缓存，并标记来源为 cgroup。
+func TestMemorySnapshotPrefersCgroupLimit(t *testing.T) {
+	cur := counters{memory: memoryCounters{total: 128 << 30, available: 64 << 30}}
+	cur.memoryLimit = 40 << 30
+	cur.memoryUsage = 30 << 30
+	cur.memoryInactive = 5 << 30
+
+	snapshot := memorySnapshot(cur)
+
+	require.Equal(t, uint64(40<<30), snapshot.TotalBytes)
+	require.Equal(t, uint64(25<<30), snapshot.UsedBytes)
+	require.Equal(t, uint64(15<<30), snapshot.AvailableBytes)
+	require.Equal(t, "cgroup", snapshot.LimitSource)
+	require.InDelta(t, 62.5, snapshot.Percent, 0.01)
+}
+
+// TestMemorySnapshotFallsBackToHost 校验没有 cgroup 限额（裸机或未设限容器）时仍按宿主口径。
+func TestMemorySnapshotFallsBackToHost(t *testing.T) {
+	cur := counters{memory: memoryCounters{total: 128 << 30, available: 64 << 30}}
+
+	snapshot := memorySnapshot(cur)
+
+	require.Equal(t, "host", snapshot.LimitSource)
+	require.Equal(t, uint64(128<<30), snapshot.TotalBytes)
+	require.Equal(t, uint64(64<<30), snapshot.UsedBytes)
+}

@@ -105,7 +105,12 @@ func (s *Sampler) Sample() proto.SystemMetrics {
 // 核心流程：总时间片差 = 全部字段变化之和，空闲片差 = idle+iowait 变化之和；
 // 百分比 = (总差 - 空闲差) / 总差。首帧没有上一帧时按开机以来的累积值计算。
 func cpuSnapshot(cur, prev counters, window time.Duration) proto.SystemCPU {
-	result := proto.SystemCPU{Load1: cur.load1, Load5: cur.load5, Load15: cur.load15}
+	result := proto.SystemCPU{
+		Load1:      cur.load1,
+		Load5:      cur.load5,
+		Load15:     cur.load15,
+		QuotaCores: cur.cpuQuotaCores,
+	}
 
 	if window > 0 && prev.cpuTotal > 0 && cur.cpuTotal >= prev.cpuTotal {
 		result.Percent = busyPercent(cur.cpuTotal-prev.cpuTotal, cur.cpuIdle-prev.cpuIdle)
@@ -137,23 +142,40 @@ func busyPercent(total, idle uint64) float64 {
 	return clampPercent(float64(total-idle) / float64(total) * 100)
 }
 
-// memorySnapshot 把 /proc/meminfo 的累积值换算成字节数：总内存减可用得已用，swap 相减得已用 swap。
+// memorySnapshot 把内存累积值换算成字节数。
+//
+// 参数：cur 当前累积计数（含 cgroup 限额）。
+// 核心流程：默认按 /proc/meminfo：总量减可用得已用；读到 cgroup 限额且小于宿主总量时，
+// 改为限额口径 —— 已用取 memory.usage 扣掉 inactive_file（不可回收缓存，与 docker stats 一致），
+// 可用 = 限额 - 已用；swap 相减得已用 swap。
 func memorySnapshot(cur counters) proto.SystemMemory {
+	total := cur.memory.total
 	var used uint64
-	if cur.memory.total > cur.memory.available {
-		used = cur.memory.total - cur.memory.available
+	if total > cur.memory.available {
+		used = total - cur.memory.available
+	}
+	limitSource := "host"
+
+	if cur.memoryLimit > 0 && cur.memoryLimit < total {
+		total = cur.memoryLimit
+		used = cur.memoryUsage
+		if cur.memoryInactive <= used {
+			used -= cur.memoryInactive
+		}
+		limitSource = "cgroup"
 	}
 	var swapUsed uint64
 	if cur.memory.swapTotal > cur.memory.swapFree {
 		swapUsed = cur.memory.swapTotal - cur.memory.swapFree
 	}
 	return proto.SystemMemory{
-		TotalBytes:     cur.memory.total,
+		TotalBytes:     total,
 		UsedBytes:      used,
-		AvailableBytes: cur.memory.available,
-		Percent:        clampPercent(ratio(used, cur.memory.total) * 100),
+		AvailableBytes: total - used,
+		Percent:        clampPercent(ratio(used, total) * 100),
 		SwapTotalBytes: cur.memory.swapTotal,
 		SwapUsedBytes:  swapUsed,
+		LimitSource:    limitSource,
 	}
 }
 
