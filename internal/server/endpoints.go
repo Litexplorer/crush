@@ -36,6 +36,17 @@ func (c *controllerV1) endpoints() []apigen.Endpoint {
 			Tags("system").
 			Handle(c.handleGetConfig),
 
+		apigen.Get("/v1/system/metrics").
+			Summary("Get host metrics").
+			Description("Returns a momentary snapshot of the host running the server: "+
+				"CPU utilisation overall and per core, memory and swap, disk space per "+
+				"mounted filesystem, and per-interface network throughput. Rates are "+
+				"derived from the delta between two samples, so client polls closer "+
+				"than 500ms receive the cached snapshot.").
+			Tags("system").
+			Responds(proto.SystemMetrics{}).
+			Handle(c.handleGetSystemMetrics),
+
 		apigen.Delete("/v1/clients/{client_id}").
 			Summary("Retire a client").
 			Description("Releases every claim the client holds.").

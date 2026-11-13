@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/crush/internal/projects"
 	"github.com/charmbracelet/crush/internal/proto"
 	"github.com/charmbracelet/crush/internal/session"
+	"github.com/charmbracelet/crush/internal/system"
 	"github.com/google/uuid"
 )
 
@@ -28,6 +29,12 @@ func (c *controllerV1) handleGetHealth(w http.ResponseWriter, _ *http.Request) {
 // handleGetVersion returns server version information.
 func (c *controllerV1) handleGetVersion(w http.ResponseWriter, _ *http.Request) {
 	jsonEncode(w, c.backend.VersionInfo())
+}
+
+// handleGetSystemMetrics returns a momentary snapshot of the host running the
+// server: CPU, memory, disk usage and per-interface network throughput.
+func (c *controllerV1) handleGetSystemMetrics(w http.ResponseWriter, _ *http.Request) {
+	jsonEncode(w, system.Default().Sample())
 }
 
 // handlePostControl sends a control command to the server.
