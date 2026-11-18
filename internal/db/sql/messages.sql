@@ -9,6 +9,32 @@ FROM messages
 WHERE session_id = ?
 ORDER BY created_at ASC;
 
+-- name: ListMessagesBySessionTail :many
+-- Newest page of a session, newest first. seq is insertion order and never
+-- ties, which created_at (one-second resolution) cannot promise.
+SELECT *
+FROM messages
+WHERE session_id = sqlc.arg(session_id)
+ORDER BY seq DESC
+LIMIT sqlc.arg(page_size);
+
+-- name: GetMessageSeq :one
+-- Cursor lookup for paging: insertion order of one message.
+SELECT seq
+FROM messages
+WHERE id = sqlc.arg(id)
+LIMIT 1;
+
+-- name: ListMessagesBySessionPage :many
+-- Page immediately preceding the cursor, same ordering contract as
+-- ListMessagesBySessionTail. The cursor row itself is never returned.
+SELECT *
+FROM messages
+WHERE session_id = sqlc.arg(session_id)
+  AND seq < sqlc.arg(cursor_seq)
+ORDER BY seq DESC
+LIMIT sqlc.arg(page_size);
+
 -- name: ListMessagesBySessionFromSummary :many
 -- Messages from the summary onward, which is all a compacted session sends.
 -- created_at has one-second resolution, so a few messages preceding the
@@ -20,6 +46,8 @@ WHERE m.session_id = ?
 ORDER BY m.created_at ASC;
 
 -- name: CreateMessage :one
+-- seq is assigned here rather than by a trigger so the RETURNING row already
+-- carries it: it is the paging cursor clients get back.
 INSERT INTO messages (
     id,
     session_id,
@@ -30,9 +58,11 @@ INSERT INTO messages (
     provider,
     is_summary_message,
     created_at,
-    updated_at
+    updated_at,
+    seq
 ) VALUES (
-    ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'), strftime('%s', 'now')
+    ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'), strftime('%s', 'now'),
+    (SELECT IFNULL(MAX(seq), 0) + 1 FROM messages)
 )
 RETURNING *;
 

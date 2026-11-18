@@ -165,7 +165,7 @@ func (s *Server) installHandler() {
 	mux.HandleFunc("GET /v1/docs/openapi.json", c.handleDocsSpec)
 	s.h = &http.Server{
 		Protocols: &p,
-		Handler:   s.recoverHandler(s.loggingHandler(mux)),
+		Handler:   s.recoverHandler(s.loggingHandler(s.gzipHandler(mux))),
 	}
 }
 

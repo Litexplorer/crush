@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/crush/internal/backend"
@@ -433,16 +434,56 @@ func (c *controllerV1) handleGetWorkspaceSessionHistory(w http.ResponseWriter, r
 	jsonEncode(w, history)
 }
 
-// handleGetWorkspaceSessionMessages returns all messages for a session.
+// maxSessionMessagesPageSize bounds ?limit so the paged path can never be
+// turned back into a whole-transcript read by a client.
+const maxSessionMessagesPageSize = 1000
+
+// handleGetWorkspaceSessionMessages returns a session's messages. With no
+// ?limit it returns the whole transcript, which keeps older clients working;
+// with ?limit it returns the newest page and reports whether older messages
+// remain via X-Has-More. ?before=<message id> pages backwards from a message.
 func (c *controllerV1) handleGetWorkspaceSessionMessages(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	sid := r.PathValue("sid")
-	messages, err := c.backend.ListSessionMessages(r.Context(), id, sid)
+	query := r.URL.Query()
+	limit := parseMessagePageSize(query.Get("limit"))
+	if limit == 0 {
+		messages, err := c.backend.ListSessionMessages(r.Context(), id, sid)
+		if err != nil {
+			c.handleError(w, r, err)
+			return
+		}
+		jsonEncode(w, messagesToProto(messages))
+		return
+	}
+
+	messages, hasMore, err := c.backend.ListSessionMessagesPage(r.Context(), id, sid, limit, query.Get("before"))
 	if err != nil {
 		c.handleError(w, r, err)
 		return
 	}
+	if hasMore {
+		w.Header().Set("X-Has-More", "true")
+	} else {
+		w.Header().Set("X-Has-More", "false")
+	}
 	jsonEncode(w, messagesToProto(messages))
+}
+
+// parseMessagePageSize turns ?limit into a page size. Zero means "no paging",
+// which the handler answers with the whole transcript.
+func parseMessagePageSize(raw string) int {
+	if raw == "" {
+		return 0
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return 0
+	}
+	if value > maxSessionMessagesPageSize {
+		return maxSessionMessagesPageSize
+	}
+	return value
 }
 
 // handlePutWorkspaceSession updates a session.

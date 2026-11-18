@@ -21,6 +21,18 @@ import (
 // debounce and flush synchronously.
 const defaultUpdateDebounce = 33 * time.Millisecond
 
+// defaultPageSize is the page size [Service.ListPage] falls back to when
+// the caller does not specify one.
+const defaultPageSize = 120
+
+// ListPageParams selects one page of a session transcript. BeforeID is
+// the cursor: empty asks for the newest page, otherwise the page
+// immediately preceding that message.
+type ListPageParams struct {
+	Limit    int
+	BeforeID string
+}
+
 type CreateMessageParams struct {
 	Role             MessageRole
 	Parts            []ContentPart
@@ -58,6 +70,10 @@ type Service interface {
 	Update(ctx context.Context, message Message) error
 	Get(ctx context.Context, id string) (Message, error)
 	List(ctx context.Context, sessionID string) ([]Message, error)
+	// ListPage returns one page of the transcript in display order (oldest
+	// first) plus whether older messages remain. It exists so clients can
+	// boot a session without paying for the whole transcript.
+	ListPage(ctx context.Context, sessionID string, params ListPageParams) ([]Message, bool, error)
 	// ListFromSummary returns the messages at or after summaryMessageID,
 	// which is all a compacted session still sends.
 	ListFromSummary(ctx context.Context, sessionID, summaryMessageID string) ([]Message, error)
@@ -590,6 +606,60 @@ func (s *service) List(ctx context.Context, sessionID string) ([]Message, error)
 		}
 	}
 	return messages, nil
+}
+
+// ListPage returns one page of a session transcript. Rows are read newest
+// first so the LIMIT only touches the page the caller asked for, and the
+// page is reversed before returning because every caller renders oldest
+// first.
+func (s *service) ListPage(ctx context.Context, sessionID string, params ListPageParams) ([]Message, bool, error) {
+	limit := params.Limit
+	if limit <= 0 {
+		limit = defaultPageSize
+	}
+	// 多取一条用来判断是否还有更早的消息，不额外发 COUNT 查询
+	dbMessages, err := s.listPageRows(ctx, sessionID, int64(limit+1), params.BeforeID)
+	if err != nil {
+		return nil, false, err
+	}
+	hasMore := len(dbMessages) > limit
+	if hasMore {
+		dbMessages = dbMessages[:limit]
+	}
+	messages := make([]Message, len(dbMessages))
+	for i, dbMessage := range dbMessages {
+		item, err := s.fromDBItem(dbMessage)
+		if err != nil {
+			return nil, false, err
+		}
+		// 查询按时间倒序，这里翻转成展示顺序
+		messages[len(dbMessages)-1-i] = item
+	}
+	return messages, hasMore, nil
+}
+
+// listPageRows reads size rows, newest first, either from the tail of the
+// session or from just before the cursor message.
+func (s *service) listPageRows(ctx context.Context, sessionID string, size int64, beforeID string) ([]db.Message, error) {
+	if beforeID == "" {
+		return s.q.ListMessagesBySessionTail(ctx, db.ListMessagesBySessionTailParams{
+			SessionID: sessionID,
+			PageSize:  size,
+		})
+	}
+	// 游标消息可能已被删除（会话被压缩/清理）：退回查最新一页，避免整页报错
+	cursor, err := s.q.GetMessageSeq(ctx, beforeID)
+	if err != nil || !cursor.Valid {
+		return s.q.ListMessagesBySessionTail(ctx, db.ListMessagesBySessionTailParams{
+			SessionID: sessionID,
+			PageSize:  size,
+		})
+	}
+	return s.q.ListMessagesBySessionPage(ctx, db.ListMessagesBySessionPageParams{
+		SessionID: sessionID,
+		CursorSeq: cursor,
+		PageSize:  size,
+	})
 }
 
 func (s *service) ListFromSummary(ctx context.Context, sessionID, summaryMessageID string) ([]Message, error) {

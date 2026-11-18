@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 
+	"github.com/charmbracelet/crush/internal/agent"
 	mcptools "github.com/charmbracelet/crush/internal/agent/tools/mcp"
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/message"
@@ -101,6 +102,45 @@ func (b *Backend) ListSessionMessages(ctx context.Context, workspaceID, sessionI
 		return nil, err
 	}
 	return ws.Messages.List(ctx, sessionID)
+}
+
+// ListSessionMessagesPage returns one page of a session transcript in display
+// order plus whether older messages remain. An empty beforeID asks for the
+// newest page; otherwise the page immediately preceding that message is
+// returned.
+//
+// Unlike ListSessionMessages this reads only the requested rows, so a session
+// with a large tool-output history no longer has to be fully unpacked just to
+// open it. Interrupted tool calls are settled for the newest page only: a
+// reply always follows its call, so older pages would otherwise look orphaned
+// and be repaired twice.
+func (b *Backend) ListSessionMessagesPage(ctx context.Context, workspaceID, sessionID string, limit int, beforeID string) ([]message.Message, bool, error) {
+	ws, err := b.GetWorkspace(workspaceID)
+	if err != nil {
+		return nil, false, err
+	}
+
+	// Drain debounced updates so the page reflects the latest in-memory state.
+	if err := ws.Messages.FlushAll(ctx); err != nil {
+		return nil, false, err
+	}
+	msgs, hasMore, err := ws.Messages.ListPage(ctx, sessionID, message.ListPageParams{
+		Limit:    limit,
+		BeforeID: beforeID,
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	if beforeID == "" && ws.AgentCoordinator != nil {
+		if settler, ok := ws.AgentCoordinator.(agent.PageSettler); ok {
+			settled, settleErr := settler.SettleMessages(ctx, sessionID, msgs)
+			if settleErr != nil {
+				return nil, false, settleErr
+			}
+			return settled, hasMore, nil
+		}
+	}
+	return msgs, hasMore, nil
 }
 
 // ListSessionHistory returns the history items for a session.

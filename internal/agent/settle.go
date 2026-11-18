@@ -203,3 +203,33 @@ func (c *coordinator) ListSettledMessages(ctx context.Context, sessionID string)
 	}
 	return settled, nil
 }
+
+// PageSettler is the optional capability paged readers use to settle an
+// already loaded transcript slice. Coordinators that only implement
+// [Coordinator] keep working; their pages come back unsettled.
+type PageSettler interface {
+	SettleMessages(ctx context.Context, sessionID string, msgs []message.Message) ([]message.Message, error)
+}
+
+// SettleMessages settles dangling tool calls inside an already loaded
+// transcript page. It shares ListSettledMessages' serialization and busy
+// checks, but never reads the transcript itself, so paged readers can settle
+// the newest page without unpacking the whole session.
+func (c *coordinator) SettleMessages(ctx context.Context, sessionID string, msgs []message.Message) ([]message.Message, error) {
+	c.settleMu.Lock()
+	defer c.settleMu.Unlock()
+
+	busy := c.IsSessionBusy(sessionID)
+	if busy || c.IsSessionBusy(sessionID) {
+		return msgs, nil
+	}
+	settled, err := repairInterruptedToolCalls(ctx, c.messages, msgs)
+	if err != nil {
+		// The repair may have stopped halfway; hand the page back untouched
+		// rather than a half-settled slice.
+		slog.Warn("Failed to settle interrupted tool calls in page",
+			"session_id", sessionID, "error", err)
+		return msgs, nil
+	}
+	return settled, nil
+}
