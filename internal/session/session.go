@@ -92,13 +92,20 @@ type Session struct {
 	PromptTokens     int64
 	CompletionTokens int64
 	TotalTokens      int64
-	EstimatedUsage   bool
-	SummaryMessageID string
-	Cost             float64
-	Todos            []Todo
-	Channel          string
-	CreatedAt        int64
-	UpdatedAt        int64
+	// Cache accounting summed over every request of the session. PromptTokens
+	// stays a snapshot of the latest request, so a hit rate needs these
+	// running counters instead: CacheReadTokens is the hit side and
+	// UncachedInputTokens the miss side.
+	CacheReadTokens     int64
+	CacheWriteTokens    int64
+	UncachedInputTokens int64
+	EstimatedUsage      bool
+	SummaryMessageID    string
+	Cost                float64
+	Todos               []Todo
+	Channel             string
+	CreatedAt           int64
+	UpdatedAt           int64
 }
 
 type Service interface {
@@ -241,11 +248,14 @@ func (s *service) Save(ctx context.Context, session Session) (Session, error) {
 	}
 
 	dbSession, err := s.q.UpdateSession(ctx, db.UpdateSessionParams{
-		ID:               session.ID,
-		Title:            session.Title,
-		PromptTokens:     session.PromptTokens,
-		CompletionTokens: session.CompletionTokens,
-		TotalTokens:      session.TotalTokens,
+		ID:                  session.ID,
+		Title:               session.Title,
+		PromptTokens:        session.PromptTokens,
+		CompletionTokens:    session.CompletionTokens,
+		TotalTokens:         session.TotalTokens,
+		CacheReadTokens:     session.CacheReadTokens,
+		CacheWriteTokens:    session.CacheWriteTokens,
+		UncachedInputTokens: session.UncachedInputTokens,
 		SummaryMessageID: sql.NullString{
 			String: session.SummaryMessageID,
 			Valid:  session.SummaryMessageID != "",
@@ -369,19 +379,22 @@ func (s *service) fromDBItem(item db.Session) Session {
 		slog.Error("Failed to unmarshal todos", "session_id", item.ID, "error", err)
 	}
 	return Session{
-		ID:               item.ID,
-		ParentSessionID:  item.ParentSessionID.String,
-		Title:            item.Title,
-		MessageCount:     item.MessageCount,
-		PromptTokens:     item.PromptTokens,
-		CompletionTokens: item.CompletionTokens,
-		TotalTokens:      item.TotalTokens,
-		SummaryMessageID: item.SummaryMessageID.String,
-		Cost:             item.Cost,
-		Todos:            todos,
-		Channel:          item.Channel.String,
-		CreatedAt:        item.CreatedAt,
-		UpdatedAt:        item.UpdatedAt,
+		ID:                  item.ID,
+		ParentSessionID:     item.ParentSessionID.String,
+		Title:               item.Title,
+		MessageCount:        item.MessageCount,
+		PromptTokens:        item.PromptTokens,
+		CompletionTokens:    item.CompletionTokens,
+		TotalTokens:         item.TotalTokens,
+		CacheReadTokens:     item.CacheReadTokens,
+		CacheWriteTokens:    item.CacheWriteTokens,
+		UncachedInputTokens: item.UncachedInputTokens,
+		SummaryMessageID:    item.SummaryMessageID.String,
+		Cost:                item.Cost,
+		Todos:               todos,
+		Channel:             item.Channel.String,
+		CreatedAt:           item.CreatedAt,
+		UpdatedAt:           item.UpdatedAt,
 	}
 }
 

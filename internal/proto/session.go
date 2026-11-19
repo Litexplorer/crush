@@ -18,22 +18,28 @@ package proto
 // under the title in session lists so a row is recognisable before opening it.
 // REST handlers populate it and omit it when the session has no prompt.
 type Session struct {
-	ID               string  `json:"id"`
-	ParentSessionID  string  `json:"parent_session_id"`
-	Title            string  `json:"title"`
-	MessageCount     int64   `json:"message_count"`
-	PromptTokens     int64   `json:"prompt_tokens"`
-	CompletionTokens int64   `json:"completion_tokens"`
-	TotalTokens      int64   `json:"total_tokens"`
-	SummaryMessageID string  `json:"summary_message_id"`
-	Subtitle         string  `json:"subtitle,omitempty"`
-	Cost             float64 `json:"cost"`
-	Todos            []Todo  `json:"todos,omitempty"`
-	Channel          string  `json:"channel,omitempty"`
-	CreatedAt        int64   `json:"created_at"`
-	UpdatedAt        int64   `json:"updated_at"`
-	IsBusy           bool    `json:"is_busy"`
-	AttachedClients  int     `json:"attached_clients"`
+	ID               string `json:"id"`
+	ParentSessionID  string `json:"parent_session_id"`
+	Title            string `json:"title"`
+	MessageCount     int64  `json:"message_count"`
+	PromptTokens     int64  `json:"prompt_tokens"`
+	CompletionTokens int64  `json:"completion_tokens"`
+	TotalTokens      int64  `json:"total_tokens"`
+	// Prompt cache accounting summed over the session. CacheHitRate is not
+	// sent: clients derive it from CacheReadTokens over the hit+miss sum so
+	// the ratio stays inspectable.
+	CacheReadTokens     int64   `json:"cache_read_tokens"`
+	CacheWriteTokens    int64   `json:"cache_write_tokens"`
+	UncachedInputTokens int64   `json:"uncached_input_tokens"`
+	SummaryMessageID    string  `json:"summary_message_id"`
+	Subtitle            string  `json:"subtitle,omitempty"`
+	Cost                float64 `json:"cost"`
+	Todos               []Todo  `json:"todos,omitempty"`
+	Channel             string  `json:"channel,omitempty"`
+	CreatedAt           int64   `json:"created_at"`
+	UpdatedAt           int64   `json:"updated_at"`
+	IsBusy              bool    `json:"is_busy"`
+	AttachedClients     int     `json:"attached_clients"`
 }
 
 // SessionTitleRequest is the body of the rename endpoint. Only the title is

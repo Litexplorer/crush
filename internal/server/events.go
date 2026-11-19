@@ -337,19 +337,22 @@ func mcpEventTypeToProto(t mcp.EventType) proto.MCPEventType {
 
 func sessionToProto(s session.Session) proto.Session {
 	return proto.Session{
-		ID:               s.ID,
-		ParentSessionID:  s.ParentSessionID,
-		Title:            s.Title,
-		SummaryMessageID: s.SummaryMessageID,
-		MessageCount:     s.MessageCount,
-		PromptTokens:     s.PromptTokens,
-		CompletionTokens: s.CompletionTokens,
-		TotalTokens:      s.TotalTokens,
-		Cost:             s.Cost,
-		Todos:            todosToProto(s.Todos),
-		Channel:          s.Channel,
-		CreatedAt:        s.CreatedAt,
-		UpdatedAt:        s.UpdatedAt,
+		ID:                  s.ID,
+		ParentSessionID:     s.ParentSessionID,
+		Title:               s.Title,
+		SummaryMessageID:    s.SummaryMessageID,
+		MessageCount:        s.MessageCount,
+		PromptTokens:        s.PromptTokens,
+		CompletionTokens:    s.CompletionTokens,
+		TotalTokens:         s.TotalTokens,
+		CacheReadTokens:     s.CacheReadTokens,
+		CacheWriteTokens:    s.CacheWriteTokens,
+		UncachedInputTokens: s.UncachedInputTokens,
+		Cost:                s.Cost,
+		Todos:               todosToProto(s.Todos),
+		Channel:             s.Channel,
+		CreatedAt:           s.CreatedAt,
+		UpdatedAt:           s.UpdatedAt,
 	}
 }
 

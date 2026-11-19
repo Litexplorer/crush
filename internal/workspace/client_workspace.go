@@ -1629,11 +1629,16 @@ func sessionToProto(s session.Session) proto.Session {
 		PromptTokens:     s.PromptTokens,
 		CompletionTokens: s.CompletionTokens,
 		TotalTokens:      s.TotalTokens,
-		Cost:             s.Cost,
-		Todos:            todosToProto(s.Todos),
-		Channel:          s.Channel,
-		CreatedAt:        s.CreatedAt,
-		UpdatedAt:        s.UpdatedAt,
+
+		CacheReadTokens:     s.CacheReadTokens,
+		CacheWriteTokens:    s.CacheWriteTokens,
+		UncachedInputTokens: s.UncachedInputTokens,
+
+		Cost:      s.Cost,
+		Todos:     todosToProto(s.Todos),
+		Channel:   s.Channel,
+		CreatedAt: s.CreatedAt,
+		UpdatedAt: s.UpdatedAt,
 	}
 }
 

@@ -2264,6 +2264,12 @@ func updateSessionTokenCounters(session *session.Session, usage fantasy.Usage) {
 	// context percentage stays meaningful. TotalTokens is the running sum of
 	// every request in the session and is never reset by summarization.
 	session.TotalTokens += usage.InputTokens + usage.CacheReadTokens + usage.OutputTokens
+	// Prompt cache counters are summed rather than snapshotted: a hit rate is
+	// a ratio over every request, while PromptTokens stays the latest prompt
+	// size for the context gauge.
+	session.CacheReadTokens += usage.CacheReadTokens
+	session.CacheWriteTokens += usage.CacheCreationTokens
+	session.UncachedInputTokens += usage.InputTokens
 	if usage.OutputTokens != 0 {
 		session.CompletionTokens = usage.OutputTokens
 	}

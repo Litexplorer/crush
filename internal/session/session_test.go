@@ -191,6 +191,53 @@ func TestTotalTokensPersistAcrossSaveAndGet(t *testing.T) {
 	require.Equal(t, int64(400), refetched.TotalTokens)
 }
 
+// TestCacheTokensPersistAcrossSaveAndGet covers the prompt cache counters:
+// they are running sums, so a fetch-modify-save cycle must carry every bucket
+// back out of the sessions table unchanged.
+func TestCacheTokensPersistAcrossSaveAndGet(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Cleanup(func() {
+		require.NoError(t, db.Release(dataDir))
+		db.ResetPool()
+	})
+
+	conn, err := db.Connect(t.Context(), dataDir)
+	require.NoError(t, err)
+
+	sessions := NewService(db.New(conn), conn)
+
+	created, err := sessions.Create(t.Context(), "test")
+	require.NoError(t, err)
+	require.Zero(t, created.CacheReadTokens)
+	require.Zero(t, created.CacheWriteTokens)
+	require.Zero(t, created.UncachedInputTokens)
+
+	created.CacheReadTokens = 2_000
+	created.CacheWriteTokens = 300
+	created.UncachedInputTokens = 500
+
+	saved, err := sessions.Save(t.Context(), created)
+	require.NoError(t, err)
+	require.Equal(t, int64(2_000), saved.CacheReadTokens)
+	require.Equal(t, int64(300), saved.CacheWriteTokens)
+	require.Equal(t, int64(500), saved.UncachedInputTokens)
+
+	fetched, err := sessions.Get(t.Context(), created.ID)
+	require.NoError(t, err)
+	require.Equal(t, int64(2_000), fetched.CacheReadTokens)
+	require.Equal(t, int64(300), fetched.CacheWriteTokens)
+	require.Equal(t, int64(500), fetched.UncachedInputTokens)
+
+	fetched.CacheReadTokens += 1_000
+	fetched.UncachedInputTokens += 400
+
+	updated, err := sessions.Save(t.Context(), fetched)
+	require.NoError(t, err)
+	require.Equal(t, int64(3_000), updated.CacheReadTokens)
+	require.Equal(t, int64(300), updated.CacheWriteTokens)
+	require.Equal(t, int64(900), updated.UncachedInputTokens)
+}
+
 // TestTodoParentPersistsAcrossSaveAndGet covers the write → read closure for
 // the tree extension: the parent reference must survive JSON round-tripping
 // through the sessions.todos column.
