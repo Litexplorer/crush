@@ -192,6 +192,52 @@ func TestReadTextFileAllowsExactMaxContentSize(t *testing.T) {
 	require.False(t, hasMore)
 }
 
+type mockViewPermissionService struct {
+	*pubsub.Broker[permission.PermissionRequest]
+}
+
+func (m *mockViewPermissionService) Request(ctx context.Context, req permission.CreatePermissionRequest) (bool, error) {
+	return true, nil
+}
+
+func (m *mockViewPermissionService) Grant(req permission.PermissionRequest) bool { return true }
+
+func (m *mockViewPermissionService) Deny(req permission.PermissionRequest) bool { return true }
+
+func (m *mockViewPermissionService) GrantPersistent(req permission.PermissionRequest) bool {
+	return true
+}
+
+func (m *mockViewPermissionService) AutoApproveSession(sessionID string) {}
+
+func (m *mockViewPermissionService) InheritAutoApproval(parentSessionID, childSessionID string) {}
+
+func (m *mockViewPermissionService) ActiveRequests() []permission.PermissionRequest {
+	return nil
+}
+
+func (m *mockViewPermissionService) SetSessionScope(scope permission.SessionScope) {}
+
+func (m *mockViewPermissionService) SetSkipRequests(skip bool) {}
+
+func (m *mockViewPermissionService) SkipRequests() bool {
+	return false
+}
+
+func (m *mockViewPermissionService) SetPermissionMode(mode permission.PermissionMode) {}
+
+func (m *mockViewPermissionService) PermissionMode() permission.PermissionMode {
+	return permission.PermissionModeNormal
+}
+
+func (m *mockViewPermissionService) SubscribeNotifications(ctx context.Context) <-chan pubsub.Event[permission.PermissionNotification] {
+	return make(<-chan pubsub.Event[permission.PermissionNotification])
+}
+
+func (m *mockViewPermissionService) SubscribeModeChanges(ctx context.Context) <-chan pubsub.Event[permission.ModeChangedEvent] {
+	return make(<-chan pubsub.Event[permission.ModeChangedEvent])
+}
+
 type mockFileTracker struct{}
 
 func (m mockFileTracker) RecordRead(ctx context.Context, sessionID, path string) {}

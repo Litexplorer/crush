@@ -265,8 +265,7 @@ SET
     uncached_input_tokens = ?,
     summary_message_id = ?,
     cost = ?,
-    todos = ?,
-    channel = ?
+    todos = ?
 WHERE id = ?
 RETURNING id, parent_session_id, title, message_count, prompt_tokens, completion_tokens, cost, updated_at, created_at, summary_message_id, todos, channel, total_tokens, cache_read_tokens, cache_write_tokens, uncached_input_tokens
 `
@@ -286,6 +285,9 @@ type UpdateSessionParams struct {
 	ID                  string         `json:"id"`
 }
 
+// channel is deliberately not written here: SetSessionChannel owns the
+// binding, so a load-modify-Save cycle with a stale session cannot
+// clobber the channel the coordinator just set.
 func (q *Queries) UpdateSession(ctx context.Context, arg UpdateSessionParams) (Session, error) {
 	row := q.queryRow(ctx, q.updateSessionStmt, updateSession,
 		arg.Title,
@@ -298,7 +300,6 @@ func (q *Queries) UpdateSession(ctx context.Context, arg UpdateSessionParams) (S
 		arg.SummaryMessageID,
 		arg.Cost,
 		arg.Todos,
-		arg.Channel,
 		arg.ID,
 	)
 	var i Session

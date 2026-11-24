@@ -72,8 +72,8 @@ func (b *Backend) GetAgentSession(ctx context.Context, workspaceID, sessionID st
 	}
 
 	var isSessionBusy bool
-	if ws.AgentCoordinator != nil {
-		isSessionBusy = ws.AgentCoordinator.IsSessionBusy(sessionID)
+	if coord := ws.Coordinator(); coord != nil {
+		isSessionBusy = coord.IsSessionBusy(sessionID)
 	}
 
 	return proto.AgentSession{
@@ -94,8 +94,8 @@ func (b *Backend) ListSessionMessages(ctx context.Context, workspaceID, sessionI
 
 	// Every remote client reads through here, so this is where interrupted
 	// calls get settled for them.
-	if ws.AgentCoordinator != nil {
-		return ws.AgentCoordinator.ListSettledMessages(ctx, sessionID)
+	if coord := ws.Coordinator(); coord != nil {
+		return coord.ListSettledMessages(ctx, sessionID)
 	}
 	// Drain debounced updates so clients observe the latest in-memory state.
 	if err := ws.Messages.FlushAll(ctx); err != nil {

@@ -43,6 +43,9 @@ WHERE parent_session_id is NULL
 ORDER BY updated_at DESC;
 
 -- name: UpdateSession :one
+-- channel is deliberately not written here: SetSessionChannel owns the
+-- binding, so a load-modify-Save cycle with a stale session cannot
+-- clobber the channel the coordinator just set.
 UPDATE sessions
 SET
     title = ?,
@@ -54,8 +57,7 @@ SET
     uncached_input_tokens = ?,
     summary_message_id = ?,
     cost = ?,
-    todos = ?,
-    channel = ?
+    todos = ?
 WHERE id = ?
 RETURNING *;
 

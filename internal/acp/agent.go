@@ -1095,7 +1095,7 @@ var questionRequestTimeout = 5 * time.Minute
 func (a *Agent) forwardQuestionRequest(ctx context.Context, sess *session, req question.Request) {
 	conn := a.connection()
 	if conn == nil {
-		sess.workspace.App.Questions.Answer(autoAnswers(req.Questions))
+		sess.workspace.App.Questions.Answer(req.ID, autoAnswers(req.Questions))
 		return
 	}
 
@@ -1106,32 +1106,32 @@ func (a *Agent) forwardQuestionRequest(ctx context.Context, sess *session, req q
 			// requestPermission options. Cancel so the tool returns a
 			// StopTurn error and the model can switch tactics; see
 			// US-023 for richer degradation options.
-			sess.workspace.App.Questions.Cancel()
+			sess.workspace.App.Questions.Cancel(req.ID)
 			return
 		}
 		rctx, cancel := context.WithTimeout(ctx, questionRequestTimeout)
 		resp, err := conn.RequestPermission(rctx, questionToPermission(req, q))
 		cancel()
 		if err != nil {
-			sess.workspace.App.Questions.Cancel()
+			sess.workspace.App.Questions.Cancel(req.ID)
 			return
 		}
 		if resp.Outcome.Cancelled != nil {
-			sess.workspace.App.Questions.Cancel()
+			sess.workspace.App.Questions.Cancel(req.ID)
 			return
 		}
 		if resp.Outcome.Selected == nil {
-			sess.workspace.App.Questions.Cancel()
+			sess.workspace.App.Questions.Cancel(req.ID)
 			return
 		}
 		answer, ok := permissionOutcomeToAnswer(q, resp.Outcome)
 		if !ok {
-			sess.workspace.App.Questions.Cancel()
+			sess.workspace.App.Questions.Cancel(req.ID)
 			return
 		}
 		answers = append(answers, answer)
 	}
-	sess.workspace.App.Questions.Answer(answers)
+	sess.workspace.App.Questions.Answer(req.ID, answers)
 }
 
 // canExpressQuestion reports whether a question type can be carried by

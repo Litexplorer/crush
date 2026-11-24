@@ -128,7 +128,6 @@ func (s *ShellItem) SetMessageID(id string) { s.messageID = id }
 func (s *ShellItem) MessageID() string { return s.messageID }
 
 func (s *ShellItem) FilterValue() string { return s.command }
-func (s *ShellItem) Finished() bool      { return !s.pending }
 
 // Spinning implements [Animatable].
 func (s *ShellItem) Spinning() bool {

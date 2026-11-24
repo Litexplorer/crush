@@ -69,12 +69,6 @@ var userAgent = fmt.Sprintf("Charm-Crush/%s (https://charm.land/crush)", version
 // reasons) instead of completing it. Details are filled in per turn.
 const providerStoppedTurnMessage = "Provider stopped the response"
 
-//go:embed templates/title.md
-var titlePrompt []byte
-
-//go:embed templates/summary.md
-var summaryPrompt []byte
-
 // Used to remove <think> tags from generated titles.
 var (
 	thinkTagRegex       = regexp.MustCompile(`(?s)<think>.*?</think>`)
@@ -101,7 +95,10 @@ type SessionAgentCall struct {
 	// Report is a subagent report this call delivers. It is written to
 	// the transcript only when delivered, so it lands where the model
 	// reads it. Prompt is still what the model reads for it.
-	Report           *message.SubAgentReport
+	Report *message.SubAgentReport
+	// Model is the large model the options below were built for. Run pins
+	// an unset one to the current model on entry.
+	Model            Model
 	ProviderOptions  fantasy.ProviderOptions
 	Attachments      []message.Attachment
 	MaxOutputTokens  int64
@@ -203,7 +200,7 @@ type SessionAgent interface {
 	QueuedPromptsList(sessionID string) []string
 	ClearQueue(sessionID string)
 	AddNote(sessionID, text string)
-	Summarize(context.Context, string, fantasy.ProviderOptions, func(context.Context, *fantasy.ProviderError) error) error
+	Summarize(context.Context, string, Model, fantasy.ProviderOptions, func(context.Context, *fantasy.ProviderError) error) error
 	Model() Model
 	GenerateTitle(ctx context.Context, sessionID, userPrompt string)
 }
@@ -243,6 +240,9 @@ type sessionAgent struct {
 	// turns; sendChannelReply treats nil as "routing disabled".
 	cfg                  *config.ConfigStore
 	disableAutoSummarize bool
+	// prompts is every prompt's text as read at startup; summarize and
+	// generateTitle take theirs from it. Nil falls back to the built-ins.
+	prompts map[string]string
 	// permissions answers whether the user is being asked about tool
 	// calls at all. Nil in tests and anywhere that never needs to know.
 	permissions permission.Service
@@ -308,9 +308,12 @@ type SessionAgentOptions struct {
 	Messages             message.Service
 	Permissions          permission.Service
 	Cfg                  *config.ConfigStore
-	Tools                []fantasy.AgentTool
-	Notify               pubsub.Publisher[notify.Notification]
-	RunComplete          pubsub.Publisher[notify.RunComplete]
+	// Prompts is every prompt's text, read once at startup. Nil uses the
+	// built-ins.
+	Prompts     map[string]string
+	Tools       []fantasy.AgentTool
+	Notify      pubsub.Publisher[notify.Notification]
+	RunComplete pubsub.Publisher[notify.RunComplete]
 	// Hooks runs lifecycle hooks for turns and compaction. Nil runs none.
 	Hooks *hooks.Runner
 	// titles is shared by a coordinator's agents so one drain covers all.
@@ -328,6 +331,7 @@ func NewSessionAgent(
 		sessions:             opts.Sessions,
 		messages:             opts.Messages,
 		cfg:                  opts.Cfg,
+		prompts:              opts.Prompts,
 		disableAutoSummarize: opts.DisableAutoSummarize,
 		permissions:          opts.Permissions,
 		tools:                csync.NewSliceFrom(opts.Tools),
@@ -517,6 +521,36 @@ func (a *sessionAgent) drainQueueForStep(sessionID string) (fold, canceled []Ses
 	return fold, canceled
 }
 
+type foldedPromptInsertion struct {
+	index    int
+	messages []fantasy.Message
+}
+
+// applyFoldedPromptInsertions restores queued prompts that PrepareStep added
+// during an earlier autonomous step. Fantasy rebuilds each step from its
+// original prompt plus model/tool responses, so PrepareStep-only additions
+// otherwise disappear on the following step and invalidate the prompt prefix.
+func applyFoldedPromptInsertions(messages []fantasy.Message, insertions []foldedPromptInsertion) []fantasy.Message {
+	if len(insertions) == 0 {
+		return messages
+	}
+
+	extra := 0
+	for _, insertion := range insertions {
+		extra += len(insertion.messages)
+	}
+	result := make([]fantasy.Message, 0, len(messages)+extra)
+	start := 0
+	for _, insertion := range insertions {
+		index := min(max(insertion.index, start), len(messages))
+		result = append(result, messages[start:index]...)
+		result = append(result, insertion.messages...)
+		start = index
+	}
+	result = append(result, messages[start:]...)
+	return result
+}
+
 // settleDroppedCalls settles queued calls removed without running. A
 // subagent report is written to the transcript, where the model reads it
 // next turn, so cancelling a turn never loses one. Each call that carries a
@@ -607,7 +641,7 @@ func (a *sessionAgent) persistCanceledTurn(ctx context.Context, call SessionAgen
 			return err
 		}
 	}
-	largeModel := a.models().Large
+	largeModel := call.Model
 	assistant, err := a.messages.Create(writeCtx, call.SessionID, message.CreateMessageParams{
 		Role:      message.Assistant,
 		Parts:     []message.ContentPart{},
@@ -649,7 +683,7 @@ func (a *sessionAgent) publishRunComplete(ctx context.Context, call SessionAgent
 // (e.g. backend.SendMessage) can apply the same checks and keep the error
 // contract consistent.
 func ValidateCall(call SessionAgentCall) error {
-	if call.Prompt == "" && !message.ContainsTextAttachment(call.Attachments) {
+	if strings.TrimSpace(call.Prompt) == "" && !message.ContainsTextAttachment(call.Attachments) {
 		return ErrEmptyPrompt
 	}
 	if call.SessionID == "" {
@@ -718,6 +752,9 @@ func turnFinish(largeModel Model, sessionID string, reason fantasy.FinishReason)
 func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *fantasy.AgentResult, retErr error) {
 	if err := ValidateCall(call); err != nil {
 		return nil, err
+	}
+	if call.Model.Model == nil {
+		call.Model = a.models().Large
 	}
 
 	if call.Channel != "" && call.channelMeta == nil {
@@ -883,7 +920,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 
 	// Copy mutable fields under lock to avoid races with SetTools.
 	agentTools := filterToolsForChannel(a.tools.Copy(), call.Channel, mcp.GetStates())
-	largeModel := a.models().Large
+	largeModel := call.Model
 	systemPrompt := a.systemPrompt.Get()
 	promptPrefix := a.systemPromptPrefix.Get()
 	var instructions strings.Builder
@@ -956,6 +993,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	a.fireTurnHook(genCtx, call, hooks.Event{Name: hooks.EventTurnStart})
 
 	var stepMessages []fantasy.Message
+	var foldedPromptInsertions []foldedPromptInsertion
 	var shouldSummarize bool
 	// Written from OnToolCall and read from OnToolResult, which fantasy
 	// invokes concurrently for parallel tool calls.
@@ -991,7 +1029,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 		turnMetrics.lastDelta = now
 	}
 	result, err = agent.Stream(genCtx, fantasy.AgentStreamCall{
-		Prompt:           modelContext + message.PromptWithTextAttachments(strings.TrimSpace(call.Prompt), call.Attachments),
+		Prompt:           modelContext + message.PromptWithTextAttachments(call.Prompt, call.Attachments),
 		Files:            files,
 		Messages:         history,
 		Headers:          sessionHeaders(call.SessionID),
@@ -1003,11 +1041,6 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 		TopK:             call.TopK,
 		FrequencyPenalty: call.FrequencyPenalty,
 		PrepareStep: func(callContext context.Context, options fantasy.PrepareStepFunctionOptions) (_ context.Context, prepared fantasy.PrepareStepResult, err error) {
-			prepared.Messages = options.Messages
-			for i := range prepared.Messages {
-				prepared.Messages[i].ProviderOptions = nil
-			}
-
 			// Use latest tools (updated by SetTools when MCP tools
 			// change), filtered for the session's channel and minus MCP
 			// servers disabled for this repository.
@@ -1029,12 +1062,25 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			// RunComplete) via the recursive run path below.
 			fold, canceled := a.drainQueueForStep(call.SessionID)
 			a.settleDroppedCalls(canceled)
+			var foldedMessages []fantasy.Message
 			for _, queued := range fold {
 				userMessage, createErr := a.createUserMessage(callContext, queued, "")
 				if createErr != nil {
 					return callContext, prepared, createErr
 				}
-				prepared.Messages = append(prepared.Messages, userMessage.ToAIMessage()...)
+				foldedMessages = append(foldedMessages, userMessage.ToAIMessage()...)
+			}
+
+			if len(foldedMessages) > 0 {
+				foldedPromptInsertions = append(foldedPromptInsertions, foldedPromptInsertion{
+					index:    len(options.Messages),
+					messages: foldedMessages,
+				})
+			}
+
+			prepared.Messages = applyFoldedPromptInsertions(options.Messages, foldedPromptInsertions)
+			for i := range prepared.Messages {
+				prepared.Messages[i].ProviderOptions = nil
 			}
 
 			prepared.Messages = dropEmptyToolMedia(prepared.Messages)
@@ -1113,13 +1159,9 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 		},
 		OnTextDelta: func(id string, text string) error {
 			markStepDelta()
-			// Strip leading newline from initial text content. This is is
+			// Strip the leading newline only when printing. This is
 			// particularly important in non-interactive mode where leading
 			// newlines are very visible.
-			if len(currentAssistant.Parts) == 0 {
-				text = strings.TrimPrefix(text, "\n")
-			}
-
 			currentAssistant.AppendContent(text)
 			return a.messages.Update(genCtx, *currentAssistant)
 		},
@@ -1376,7 +1418,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	continued := false
 	if shouldSummarize {
 		a.activeRequests.Del(call.SessionID)
-		summarizeErr := a.summarize(genCtx, call.SessionID, compactTriggerAuto, call.ProviderOptions, call.OnAuthRefresh)
+		summarizeErr := a.summarize(genCtx, largeModel, call.SessionID, compactTriggerAuto, call.ProviderOptions, call.OnAuthRefresh)
 		switch {
 		case errors.Is(summarizeErr, ErrCompactionBlocked):
 			// Uncompacted, the next step would only hit the limit
@@ -1522,17 +1564,19 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	return a.Run(ctx, firstQueuedMessage)
 }
 
-// Summarize compacts the session on the user's request. It returns
-// ErrCompactionBlocked when a PreCompact hook blocks it.
-func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fantasy.ProviderOptions, onAuthRefresh func(context.Context, *fantasy.ProviderError) error) error {
+// Summarize compacts the session on the user's request with model, which
+// must be the model opts were built for. It returns ErrCompactionBlocked
+// when a PreCompact hook blocks it.
+func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, model Model, opts fantasy.ProviderOptions, onAuthRefresh func(context.Context, *fantasy.ProviderError) error) error {
 	if a.HasPendingWork(sessionID) {
 		return ErrSessionBusy
 	}
-	return a.summarize(ctx, sessionID, compactTriggerManual, opts, onAuthRefresh)
+	return a.summarize(ctx, model, sessionID, compactTriggerManual, opts, onAuthRefresh)
 }
 
-func (a *sessionAgent) summarize(ctx context.Context, sessionID, trigger string, opts fantasy.ProviderOptions, onAuthRefresh func(context.Context, *fantasy.ProviderError) error) error {
-	largeModel := a.models().Large
+// summarize compacts the session with largeModel, which must be the model
+// opts were built for.
+func (a *sessionAgent) summarize(ctx context.Context, largeModel Model, sessionID, trigger string, opts fantasy.ProviderOptions, onAuthRefresh func(context.Context, *fantasy.ProviderError) error) error {
 	systemPromptPrefix := a.systemPromptPrefix.Get()
 
 	currentSession, err := a.sessions.Get(ctx, sessionID)
@@ -1567,7 +1611,7 @@ func (a *sessionAgent) summarize(ctx context.Context, sessionID, trigger string,
 
 	agent := fantasy.NewAgent(
 		largeModel.Model,
-		fantasy.WithSystemPrompt(string(summaryPrompt)),
+		fantasy.WithSystemPrompt(promptOrBuiltin(a.prompts, "summary")),
 		fantasy.WithUserAgent(userAgent),
 	)
 	summaryMessage, err := a.messages.Create(ctx, sessionID, message.CreateMessageParams{
@@ -1983,11 +2027,12 @@ func (a *sessionAgent) generateTitle(ctx context.Context, sessionID string, user
 	models := a.models()
 	smallModel, largeModel := models.Small, models.Large
 	systemPromptPrefix := a.systemPromptPrefix.Get()
+	titlePrompt := promptOrBuiltin(a.prompts, "title")
 
-	newAgent := func(m fantasy.LanguageModel, p []byte, tok int64) fantasy.Agent {
+	newAgent := func(m fantasy.LanguageModel, p string, tok int64) fantasy.Agent {
 		return fantasy.NewAgent(
 			m,
-			fantasy.WithSystemPrompt(string(p)+"\n /no_think"),
+			fantasy.WithSystemPrompt(p+"\n /no_think"),
 			fantasy.WithMaxOutputTokens(tok),
 			fantasy.WithUserAgent(userAgent),
 		)
@@ -2422,14 +2467,19 @@ func (a *sessionAgent) QueuedPrompts(sessionID string) int {
 	return len(l)
 }
 
+// QueuedPromptsList returns the queued prompts a user sees. Hidden
+// continuations are left out, as they are in the transcript, though
+// QueuedPrompts still counts them.
 func (a *sessionAgent) QueuedPromptsList(sessionID string) []string {
 	l, ok := a.messageQueue.Get(sessionID)
 	if !ok {
 		return nil
 	}
-	prompts := make([]string, len(l))
-	for i, call := range l {
-		prompts[i] = call.Prompt
+	prompts := make([]string, 0, len(l))
+	for _, call := range l {
+		if !call.HiddenUserMessage {
+			prompts = append(prompts, call.Prompt)
+		}
 	}
 	return prompts
 }

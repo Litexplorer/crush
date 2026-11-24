@@ -15,7 +15,7 @@ type filterableStub struct {
 func (s filterableStub) Filter() string { return s.body }
 
 func newFilterableStub(body string) filterableStub {
-	return filterableStub{newTrackedItem(body, body, true)}
+	return filterableStub{newTrackedItem(body, body)}
 }
 
 // TestFilterableList_FirstRenderShowsItems guards a poisoned-scroll-offset
