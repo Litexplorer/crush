@@ -54,6 +54,13 @@ import (
 
 var clientHost string
 
+// spawnedServerEnv marks a server that a client process started on its
+// behalf. Such a server shuts itself down once idle so it cannot outlive
+// the client; a server started explicitly with `crush server` has no such
+// marker and keeps running. The variable is set on the child environment by
+// [detachedServerCmd] and read by the server command.
+const spawnedServerEnv = "CRUSH_SPAWNED_SERVER"
+
 func init() {
 	rootCmd.PersistentFlags().StringP("cwd", "c", "", "Current working directory")
 	rootCmd.PersistentFlags().StringP("data-dir", "D", "", "Custom crush data directory")
@@ -274,9 +281,13 @@ func supportsProgressBar() bool {
 	return isWindowsTerminal || xstrings.ContainsAnyOf(strings.ToLower(termProg), "ghostty", "iterm2", "rio")
 }
 
-// useClientServer returns true when the client/server architecture is
-// enabled via the CRUSH_CLIENT_SERVER environment variable.
-func useClientServer() bool {
+// useClientServer reports whether to use the client/server architecture:
+// when the CRUSH_CLIENT_SERVER environment variable enables it, or when
+// --host names a server to connect to.
+func useClientServer(cmd *cobra.Command) bool {
+	if cmd.Flags().Changed("host") {
+		return true
+	}
 	v, _ := strconv.ParseBool(os.Getenv("CRUSH_CLIENT_SERVER"))
 	return v
 }
@@ -298,12 +309,12 @@ func setupWorkspaceWithProgressBar(cmd *cobra.Command) (workspace.Workspace, fun
 	return ws, cleanup, err
 }
 
-// setupWorkspace returns a Workspace and cleanup function. When
-// CRUSH_CLIENT_SERVER=1, it connects to a server process and returns a
-// ClientWorkspace. Otherwise it creates an in-process app.App and
+// setupWorkspace returns a Workspace and cleanup function. In client/server
+// mode (see [useClientServer]) it connects to a server process and returns
+// a ClientWorkspace. Otherwise it creates an in-process app.App and
 // returns an AppWorkspace.
 func setupWorkspace(cmd *cobra.Command) (workspace.Workspace, func(), error) {
-	if useClientServer() {
+	if useClientServer(cmd) {
 		return setupClientServerWorkspace(cmd)
 	}
 	return setupLocalWorkspace(cmd)
@@ -557,7 +568,7 @@ func createWorkspaceOnLiveServer(
 			return ws, nil
 		}
 		if !errors.Is(err, client.ErrServerShuttingDown) || attempt == maxStaleServerRetries-1 {
-			return nil, fmt.Errorf("failed to create workspace: %v", err)
+			return nil, err
 		}
 		slog.Warn("Server is shutting down; retrying against a replacement",
 			"attempt", attempt+1, "error", err)
@@ -1237,6 +1248,9 @@ func detachedServerCmd(exe, dir string, args ...string) *exec.Cmd {
 	// process's lifetime.
 	c := exec.CommandContext(context.Background(), exe, args...)
 	c.Dir = dir
+	// Tell the server a client spawned it, so it keeps the idle shutdown
+	// that stops it from outliving that client.
+	c.Env = append(os.Environ(), spawnedServerEnv+"=1")
 	return c
 }
 
